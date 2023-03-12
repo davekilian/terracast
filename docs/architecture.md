@@ -16,9 +16,11 @@ Terrascale consists of the following software components:
 * The Terrascale API, which provides frontend and backend programability
 * The Terrascale app, a real-time collaborative, version-controlled studio for analysis projects
 
-## Workload Assumptions
+This document begins with a discussion of the TerrascaleDB database design, and then moves on to frontend rendering, API and editing components.
 
 ## Cloud Provisioning
+
+## Workload Assumptions
 
 ## Storage Model
 
