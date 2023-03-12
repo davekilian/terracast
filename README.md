@@ -1,0 +1,1 @@
+Terrascale is a cloud-native data storage, analysis and visualization system with first-class support for geospatial queries and real-time analysis over streaming data.
