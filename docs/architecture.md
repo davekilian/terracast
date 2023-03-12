@@ -34,6 +34,8 @@ Types of database queries we expect include
 
 ## Storage Model
 
+TODO this is layered. The lowest level is abstractions over block and object storage devices identified by URIs. The next level is a replication, erasure coding, checksumming and encrypting protection layer. The top level is higher-level storage primitives like logs and key-value catalogs for schema information.
+
 ## Transactions and Concurrency Control
 
 ## Distributed SQL Queries
@@ -46,5 +48,9 @@ Types of database queries we expect include
 
 ## Embeddable Visualizer
 
-## Editor, Projects and Version Control
+## Projects and Version Control
+
+## Terrascale.io
+
+
 
