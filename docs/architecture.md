@@ -44,9 +44,9 @@ Kinds of queries we expect and optimize for include...
 
 TODO this is layered. The lowest level is abstractions over block and object storage devices identified by URIs. The next level is a replication, erasure coding, checksumming and encrypting protection layer. The top level is higher-level storage primitives like logs and key-value catalogs for schema information.
 
-## Indexing Structures
+## Indexing Structures and Aggregate Analysis
 
-TODO this is an LSM-tree on replicated block storage which after checkpointing gets re-sorted into a Druid-like columnar inverted index optimized for aggregate functions.
+TODO this is an LSM-tree on replicated block storage which after checkpointing gets re-sorted into a Druid-like columnar inverted index optimized for aggregate functions. Most aggregate functions work just fine on the columnar inverted level, for example min just gets the lowest matching column value that has nonzero bits, count distinct and sum just look at number of instances of each column value, and mean is just sum divided by count. Some functions like ranks and percentiles need larger scans and may require more work, and/or approximation algorithms if we can find them (think like the quick select median of medians).
 
 ## Transactions and Concurrency Control
 
