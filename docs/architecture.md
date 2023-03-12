@@ -22,33 +22,41 @@ Terrascale consists of the following software components:
 
 Terrascale is a multi-tenant service through which customers manage single-tenant compute and storage primitives stored in a third-party cloud such as AWS, Azure or GCP. The model is similar to Snowflake's virtual warehouse concept. This gives customers fine-grained control over the compute-vs-cost tradeoff, and isolates compute- and I/O-heavy analytical queries to individual customers.
 
-## Workload Assumptions
+## Database Workloads
 
-Terrascale is a hybrid transactional/analytical database with support for high-volume short-lived transactional queries in tandem with low-volume long-lived analytical (cross-tabulation) queries. Analytical queries can be run as a single finite request, or incrementally over real-time streaming data. Kinds of queries we expect and optimize more include
+Terrascale is a hybrid transactional/analytical database with support for high-volume short-lived transactional queries in tandem with low-volume long-lived analytical (cross-tabulation) queries. Analytical queries can be run as a single finite request, or incrementally over real-time streaming data. Users can independently scale compute and storage resources as a means to control the cost-performance tradeoff.
 
-**Point reads and writes**: Users can build their datasets from operational data, 
+Kinds of queries we expect and optimize for include...
 
+**Point reads and writes**: Workloads where users build their datasets from operational data such as sensor data ingestion or logging human interactions with software, will be characterized by point writes, each inserting a single row, potentially at a high rate with high parallelism. These workloads may be write-only, if users maintain their operational data in a separate database system and stream it to Terrascale, e.g. using Postgres's change data capture mechanism; alternately, these workloads may mix point reads and writes, if users maintain their operational data directly in Terrascale. These are expected to always occur within a single table partition.
 
+**Time- and space-windowed queries**: As data streams into a Terrascale instance, we expect to see queries over small space and time ranges as human users export their data for human visualization or programmatic observability (monitoring and alerts). For most users, most of the time, we expect a low volume of these kinds of queries. However, this scenario needs to perform adequately under high volume, e.g. when a user's visualization get the "hug of death" from aggregators like Reddit and Hacker News &mdash; important early growth drivers for Terrascale itself. These are the mainline senario for real-time streaming incremental queries. Although windows may cross table partitions, we expect each query to cross few enough table partitions that clients can manage views themselves.
 
+**Bulk import**: When users important data in bulk, either by importing an existing dataset into Terrascale or doing nightly dumps of operational data into Terrascale, workloads will be characterized by a few write transactions consisting of many, many rows. We do not expect these to happen often, nor do we expect more than one or two in parallel, but ingestion operations need to be atomic, restartable, and work across many table partitions.
 
+**Analysis**: Users are expected to use their datasets, whether built operationally or via obtained via a bulk import, for cross-tabulating analysis. Although users are expected to run few analytical queries at a time, each of these queries may operate over large amounts of data cross all partitions of multiple tables, necessitating distributed joins and shuffles between nodes a la map-reduce. We expect many users to run analytical queries on a fixed schedule to warehouse data insights, but some users may wish to run incremental analysis on real-time streaming data for scenarios like anomaly detection for alerting.
 
+**Complex updates**: As part of cleaning and maintaining large and complex datasets, we expect users will occasionally need to issue one-off 'corrections' to datasets. These are characterized by large, complex transactions which may read many rows, do some sort of computation, and push many updates. Table schema changes are another example of this kind of workload. These large transactions are challenging to handle well, since they may cross many table partitions and need to have full serializable semantics; however, because they are low volume and only happen occassionally, we don't optimize for these. We simply ensure these produce the correct results without causing excessive downtime for real-time and operational workloads.
 
-
-
-
-Types of database queries we expect include
-
-* **Point reads and writes**: TODO OLTP for backend data management
-* **Time- and space-windowed queries**: TODO OLTP for frontend visualization
-* **Bulk import**: TODO as labeled
-* **Analysis**: TODO large-scale OLAP reads
-* **Complex transactions**: TODO occasional large-scale updates and schema changes
+**Bulk export**: 
 
 ## Storage Model
 
 TODO this is layered. The lowest level is abstractions over block and object storage devices identified by URIs. The next level is a replication, erasure coding, checksumming and encrypting protection layer. The top level is higher-level storage primitives like logs and key-value catalogs for schema information.
 
+## Indexing Structures
+
+TODO this is an LSM-tree on replicated block storage which after checkpointing gets re-sorted into a Druid-like columnar inverted index optimized for aggregate functions.
+
 ## Transactions and Concurrency Control
+
+TODO this is an LSN-ordered publish log for write-only (WO) transactions, snapshot isolation for read-only (RO) transactions at any scale (point, window, analytical), and a predicate locking scheme for read-write (RW) transactions for the complex update scenario. WO transactions are written to one of the active write-ahead logs with a single record that describes and commits the transactions, whereas RW transactions commit incrementally, with the final commit piggybacked on the last incremental write. Recovery replays committed transactions and ignores uncommited ones; since this is an LSM, there is only a log, so there is nothing to undo.
+
+The problem that needs to be solved here is how to rectify an ahead-of-time LSN ordering scheme with long running RW transactions with unpredictable predicate locking. If the predicates can be found ahead of time, we can ensure serializability easily, but if RW transactions can incrementally lock more and more predicates, it's not clear how to let that happen without locking the whole WO publish queue. An RW transaction can
+
+But that's fine, I think we document two schemes. If it's possible to predicate lock for an RW transaction ahead of time, then the RW transaction simply acquires all predicate locks, waits for all preceding RW or WO transaction, then executes on its own isolated snapshot view of the world. If for some reason that is not feasible for some queries, those must lock the entire WO queue, which sucks but at least we can do some background buffering so when RW finally publishes, all WOs that were waiting on it show up instantly as well.
+
+## Aggregate Analysis of Columnar Data
 
 ## Distributed SQL Queries
 
