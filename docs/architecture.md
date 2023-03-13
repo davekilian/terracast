@@ -82,15 +82,23 @@ I think, if object stores are truly one-and-done, then a simple strategy might b
 
 ## Indexing Structures
 
-TerrascaleDB indexes data using a log-structured merge strategy which combines row-oriented and columnar inverted indexing. At lower levels of the LSM Tree, rows are indexed only in a row-oriented tree sorted by the table's primary key; at deeper levels of the LSM Tree, this row-oriented format is cross-merged into separate a separate row-oriented B+ Tree sorted by primary key, and per-column LSM-Trees which use an inverted indexing scheme similar to Apache Druid. The rows themselves are stored outside the tree, and are managed using copy-forward garbage collection. Some aggregate information is stored inside these columnar LSM Trees to accelerate SQL aggregate queries.
+TerrascaleDB indexes data using a log-structured merge strategy which combines row-oriented and columnar inverted indexing. New rows are logged to a dedicated row log, and are indexed in a row index and a column index, each of which is log-structured merge over B+ trees which bottom out to pointers into the row log. The row log is managed using a copy-forward garbage collection scheme. Some aggregate information is stored inside these columnar LSM Trees to accelerate SQL aggregate queries.
+
+This design mixes ideas found in Apache Druid and WiscKey.
 
 ### The Row Index
 
-
+TerrascaleDB's row index is log-structured merge over B+ trees with rows stored out of the tree, as suggested in the WiscKey paper. Because row payloads are not stored in the tree and keys are generally assumed to be small, the row index itself is not large relative to the size of the row array, making it possible to have only a few levels of the tree and simple merge policies, without fear of ballooning write amplification.
 
 ### The Column Index
 
+TerrascaleDB's column index uses an inverted indexing strategy inspired by Apache Druid, which is in turn inspired by document search databases such as Apache Lucene.
 
+A traditional column store stores data in one array per column, where the $i^{th}$ entry in a column array is the value for that column for the $i^{th}$ row. In this scheme, the $i^{th}$ row can be read in its entirey by reading the $i^{th}$ entry of each column array and concatenating the values to obtain the original row. This tends to work well for queries which run aggregate functions like min, max, and average over a single column, since all the values that need to be calculated on appear in a single file, with no unrelated data in the same file. In addition, the simple structure of these files makes them amenable to simple but highly effective compression schemes, which further saves I/O bandwidth in a large 
+
+In a Druid-like inverted column store, columns are instead indexed by their values. This means each entry is a key-value pair mapping (the value that appears for this column in one or more rows of the table) to (indexes of rows which have this value for this column). For example, if an $Addresses$ table had a column $City$, and the $i^{th}$ row had the value $Bellevue$ for $City$, then the $City$ index of the $Addresses$ table would map the value $Bellevue$ to a set of row IDs including $i$, since row $i$ has $City=Bellevue$. This scheme is particularly effective when a column value appears in many rows. The set of row IDs for a given column is usually stored in a compressed bitmap structure such as Roaring Bitmaps.
+
+In TerrascaleDB, the column index for a given column is an LSM Tree which maps column values to a set of matching rows. For values that only appear in a few rows, the row pointers are stored directly in the tree; for larger row sets, the rows are stored in an external roaring bitmap. For each row set, a result count is stored directly in the tree. 
 
 ### Write-Ahead, Checkpoint and Merge
 
@@ -103,24 +111,6 @@ TerrascaleDB indexes data using a log-structured merge strategy which combines r
 ### Queries and Access Paths
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
----
-
-TODO this is an LSM-tree on replicated block storage which after checkpointing gets re-sorted into a Druid-like columnar inverted index optimized for aggregate functions. The rows are logged to a WAL and then linked into a logical log which is managed with copy-forward GC. A row LSM and columnar inverted LSMs which point into this row log. The columnar index is a B+ tree and the leaf nodes have (value, ptr) pairs, where the ptr either points to a single row if only one hit, or a bitmap for multiple. 
-
----
 
 ## Aggregate Analysis
 
