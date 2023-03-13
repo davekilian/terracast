@@ -46,6 +46,8 @@ Kinds of queries we expect and optimize for include...
 
 **Bulk export**: Customers may wish to do large, point-in-time bulk reads to export data from Terrascale as part of a wider ETL process that copies or backs up Terrascale data to a separate system. Like bulk import, exports need to provide consistency and restartability, whether the latter is achieved through idempotency or a checkpoint/restart protocol.
 
+TODO the date types are expected to be scalar, 1D spatial, multidimensional spatial, time; this is not a document store and is not well-suited for handling semi-structured data.
+
 ## Storage Model
 
 TerrascaleDB's cloud native storage model features tiered abstractions over underlying storage, allowing efficient utilization of a variety of cloud-native and local unstructured data storage systems. Although we initially intend TerrascaleDB to run on the cloud and use cloud-native object and block stores, we anticipate a future need to run TerrascaleDB locally, e.g. as a small cluster of nodes inside a ruggedized box. As such, the TerrascaleDB storage model is flexible, abstract and software-defined.
@@ -82,13 +84,23 @@ I think, if object stores are truly one-and-done, then a simple strategy might b
 
 ## Indexing Structures
 
-TerrascaleDB indexes data using a log-structured merge strategy which combines row-oriented and columnar inverted indexing. New rows are logged to a dedicated row log, and are indexed in a row index and a column index, each of which is log-structured merge over B+ trees which bottom out to pointers into the row log. The row log is managed using a copy-forward garbage collection scheme. Some aggregate information is stored inside these columnar LSM Trees to accelerate SQL aggregate queries.
+TerrascaleDB indexes data using a log-structured merge strategy inspired by design elements featured in Apache Druid and WiscKey.
 
-This design mixes ideas found in Apache Druid and WiscKey.
+Like in WiscKey, new rows are logged to a dedicated row log in arrival order, are indexed externally using log-structured merge trees, and are cleaned up using a copy-forward garbage collection scheme. Storing rows out-of-page with respect to the log-structured merge tree index incurs additional read amplification (since rows are not in the tree and must be fetched with an additional read after the tree lookup) but allows for lower write amplification (since the rows themselves do not need to be rewritten with the rest of the tree on checkpoint and merge). This design is particularly well-suited to modern flash memory, which provide good parallel random-read performance but tend to wear out under write-heavy workloads.
+
+TerrascaleDB uses a dual indexing strategy over this arrival-order row log. One of the indexes is a traditional row-oriented log-structured merge tree which maps row primary keys to the corresponding row positions in the row log. The other index is a columnar inverted index inspired by Apache Druid. The row index is well-suited for answering OLTP queries that request individual rows (including point queries and bounding-box window queries), and the columnar index is well-suited for OLAP (cross-tabulation) queries that feature large-scale aggregation and grouping with potentially complex multidimensional filters.
+
+TerrascaleDB's analytics engine borrows heavily from Druid's columnar inverted index design, which is in turn inspired by document search stores like Apache Lucene. We begin our discussion with a short overview of these ideas since they're less well known:
 
 ### Theory: Inverted Columnar Indexing
 
-### Indexing Structures Overview
+TODO a traditional row store is good for row lookups but does poorly on cross-tabulation. No simple way to select related rows for an aggregation, any you ignore most of what you read.
+
+A traditional column store stores data in one array per column on disk, where the $i^{th}$ entry in an on-disk column array is the value for that column in the $i^{th}$ row. In this scheme, you can reconstruct the $i^{th}$ row by reading the $i^{th}$ entry of each column array separately and concatenating the resulting values to get back the original row. This tends to work well for queries which run aggregate functions like min, max, and average over a single column, since all the values that need to be calculated on appear in a single array, with no unrelated data in the same file. The simple structure of these files also makes them highly compressible, which further saves I/O bandwidth in a large analytical query.
+
+In a Druid-like inverted column store, columns are instead indexed by their values. This means each entry is a key-value pair mapping (the value that appears for this column in one or more rows of the table) to (indexes of rows which have this value for this column). For example, if an $Addresses$ table had a column $City$, and the $i^{th}$ row had the value $Bellevue$ for $City$, then the $City$ index of the $Addresses$ table would map the value $Bellevue$ to a set of row IDs including $i$, since row $i$ has $City=Bellevue$. This scheme is particularly effective when a column value appears in many rows. The set of row IDs for a given column is usually stored in a compressed bitmap structure such as Roaring Bitmaps.
+
+In TerrascaleDB, the column index for a given column is an LSM Tree which maps column values to a set of matching rows. For values that only appear in a few rows, the row pointers are stored directly in the tree; for larger row sets, the rows are stored in an external roaring bitmap. For each row set, a result count is stored directly in the tree. 
 
 ### The Row Log
 
@@ -111,27 +123,9 @@ TODO all we need to say here is that nothing special happens; rows are indexed b
 
 We don't implement r-trees or anything else. It may be worth documenting some of the old ideas I had around geospatial z-ordered octrees which can be managed using an LSM strategy, as something we could consider if we ever found a compelling use case.
 
+### Storage
 
-
----
-
-Old content to follow, needs cleanup and organization into new structure above
-
----
-
-### The Row Index
-
-TerrascaleDB's row index is log-structured merge over B+ trees with rows stored out of the tree, as suggested in the WiscKey paper. Because row payloads are not stored in the tree and keys are generally assumed to be small, the row index itself is not large relative to the size of the row array, making it possible to have only a few levels of the tree and simple merge policies, without fear of ballooning write amplification.
-
-### The Column Index
-
-TerrascaleDB's column index uses an inverted indexing strategy inspired by Apache Druid, which is in turn inspired by document search databases such as Apache Lucene.
-
-A traditional column store stores data in one array per column, where the $i^{th}$ entry in a column array is the value for that column for the $i^{th}$ row. In this scheme, the $i^{th}$ row can be read in its entirey by reading the $i^{th}$ entry of each column array and concatenating the values to obtain the original row. This tends to work well for queries which run aggregate functions like min, max, and average over a single column, since all the values that need to be calculated on appear in a single file, with no unrelated data in the same file. In addition, the simple structure of these files makes them amenable to simple but highly effective compression schemes, which further saves I/O bandwidth in a large 
-
-In a Druid-like inverted column store, columns are instead indexed by their values. This means each entry is a key-value pair mapping (the value that appears for this column in one or more rows of the table) to (indexes of rows which have this value for this column). For example, if an $Addresses$ table had a column $City$, and the $i^{th}$ row had the value $Bellevue$ for $City$, then the $City$ index of the $Addresses$ table would map the value $Bellevue$ to a set of row IDs including $i$, since row $i$ has $City=Bellevue$. This scheme is particularly effective when a column value appears in many rows. The set of row IDs for a given column is usually stored in a compressed bitmap structure such as Roaring Bitmaps.
-
-In TerrascaleDB, the column index for a given column is an LSM Tree which maps column values to a set of matching rows. For values that only appear in a few rows, the row pointers are stored directly in the tree; for larger row sets, the rows are stored in an external roaring bitmap. For each row set, a result count is stored directly in the tree. 
+TODO use block stores for the entire row system, but offload compressed columnar runs to object storage? Requires more thinking
 
 ## Aggregate Analysis
 
