@@ -86,6 +86,39 @@ TerrascaleDB indexes data using a log-structured merge strategy which combines r
 
 This design mixes ideas found in Apache Druid and WiscKey.
 
+### Theory: Inverted Columnar Indexing
+
+### Indexing Structures Overview
+
+### The Row Log
+
+
+### Memory Tables
+
+### Row Tables
+
+### Column Tables
+
+### Write-Ahead, Checkpoint and Merge
+
+### Garbage Collection
+
+### Queries and Access Paths
+
+### Geospatial Indexing
+
+TODO all we need to say here is that nothing special happens; rows are indexed by primary key, and we don't support geospatial primary keys. The interesting part is what we do with columns, which is to compute bounding boxes and store them as overlapping ranges with one dimension per column, with range breakdown to handle overlaps. This allows us to index by bounding box by finding overlapping ranges in each column, and taking the set intersection of all row sets to get a set of all items which are near the bounding box. The query layer must then do fast-rejects on the 'actual' query bounding boxes and then any detailed join algorithms, which may be accelerated for large sets using spatial structures like kd-trees. 
+
+We don't implement r-trees or anything else. It may be worth documenting some of the old ideas I had around geospatial z-ordered octrees which can be managed using an LSM strategy, as something we could consider if we ever found a compelling use case.
+
+
+
+---
+
+Old content to follow, needs cleanup and organization into new structure above
+
+---
+
 ### The Row Index
 
 TerrascaleDB's row index is log-structured merge over B+ trees with rows stored out of the tree, as suggested in the WiscKey paper. Because row payloads are not stored in the tree and keys are generally assumed to be small, the row index itself is not large relative to the size of the row array, making it possible to have only a few levels of the tree and simple merge policies, without fear of ballooning write amplification.
@@ -99,24 +132,6 @@ A traditional column store stores data in one array per column, where the $i^{th
 In a Druid-like inverted column store, columns are instead indexed by their values. This means each entry is a key-value pair mapping (the value that appears for this column in one or more rows of the table) to (indexes of rows which have this value for this column). For example, if an $Addresses$ table had a column $City$, and the $i^{th}$ row had the value $Bellevue$ for $City$, then the $City$ index of the $Addresses$ table would map the value $Bellevue$ to a set of row IDs including $i$, since row $i$ has $City=Bellevue$. This scheme is particularly effective when a column value appears in many rows. The set of row IDs for a given column is usually stored in a compressed bitmap structure such as Roaring Bitmaps.
 
 In TerrascaleDB, the column index for a given column is an LSM Tree which maps column values to a set of matching rows. For values that only appear in a few rows, the row pointers are stored directly in the tree; for larger row sets, the rows are stored in an external roaring bitmap. For each row set, a result count is stored directly in the tree. 
-
-### Write-Ahead, Checkpoint and Merge
-
-
-
-### Garbage Collection
-
-
-
-### Queries and Access Paths
-
-
-
-### Geospatial Indexing
-
-TODO all we need to say here is that nothing special happens; rows are indexed by primary key, and we don't support geospatial primary keys. The interesting part is what we do with columns, which is to compute bounding boxes and store them as overlapping ranges with one dimension per column, with range breakdown to handle overlaps. This allows us to index by bounding box by finding overlapping ranges in each column, and taking the set intersection of all row sets to get a set of all items which are near the bounding box. The query layer must then do fast-rejects on the 'actual' query bounding boxes and then any detailed join algorithms, which may be accelerated for large sets using spatial structures like kd-trees. 
-
-We don't implement r-trees or anything else. It may be worth documenting some of the old ideas I had around geospatial z-ordered octrees which can be managed using an LSM strategy, as something we could consider if we ever found a compelling use case.
 
 ## Aggregate Analysis
 
