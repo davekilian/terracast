@@ -44,9 +44,15 @@ Kinds of queries we expect and optimize for include...
 
 TODO this is layered. The lowest level is abstractions over block and object storage devices identified by URIs. The next level is a replication, erasure coding, checksumming and encrypting protection layer. The top level is higher-level storage primitives like logs and key-value catalogs for schema information.
 
-## Indexing Structures and Aggregate Analysis
+## Indexing Structures
 
-TODO this is an LSM-tree on replicated block storage which after checkpointing gets re-sorted into a Druid-like columnar inverted index optimized for aggregate functions. Most aggregate functions work just fine on the columnar inverted level, for example min just gets the lowest matching column value that has nonzero bits, count distinct and sum just look at number of instances of each column value, and mean is just sum divided by count. Some functions like ranks and percentiles need larger scans and may require more work, and/or approximation algorithms if we can find them (think like the quick select median of medians).
+TODO this is an LSM-tree on replicated block storage which after checkpointing gets re-sorted into a Druid-like columnar inverted index optimized for aggregate functions. The rows are logged to a WAL and then linked into a logical log which is managed with copy-forward GC. A row LSM and columnar inverted LSMs which point into this row log. The columnar index is a B+ tree and the leaf nodes have (value, ptr) pairs, where the ptr either points to a single row if only one hit, or a bitmap for multiple. 
+
+## Aggregate Analysis
+
+TODO Anything you can do on unsorted columnar data, you can also do on an inverted index. When you come across a column value in an inverted index, you repeat whatever you would have done with your columnar forward index as many times as there are matching bits in the bitset.
+
+More concrete examples: min just gets the lowest matching column value that has nonzero bits, count distinct and sum just look at number of instances of each column value, and mean is just sum divided by count. Some functions like ranks and percentiles need larger scans and may require more work, and/or approximation algorithms if we can find them (think like the quick select median of medians).
 
 ## Transactions and Concurrency Control
 
