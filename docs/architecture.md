@@ -56,23 +56,36 @@ The problem that needs to be solved here is how to rectify an ahead-of-time LSN 
 
 But that's fine, I think we document two schemes. If it's possible to predicate lock for an RW transaction ahead of time, then the RW transaction simply acquires all predicate locks, waits for all preceding RW or WO transaction, then executes on its own isolated snapshot view of the world. If for some reason that is not feasible for some queries, those must lock the entire WO queue, which sucks but at least we can do some background buffering so when RW finally publishes, all WOs that were waiting on it show up instantly as well.
 
-## Aggregate Analysis of Columnar Data
-
 ## Distributed SQL Queries
+
+TODO this is raft for distributed commit of transactions. A good question is who plans and optimizes the query. It could be a random node in the network, or it could be the raft leader (if that wouldn't be a bottleneck, at least the leader is always up to date, right?) or it could be a multi-tenant cloud orchestration service sitting in front of the cluster (but I'd rather do everything in the cluster if possible, since we want to keep open the possibility of shipping a small cluster of nodes in a box).
 
 ## Geospatial
 
+TODO this is columnar range breakdown to find matching items within bounding boxes, then analytical collision detection and other spatial algorithms to finish joins and whatnot
+
 ## Incremental Queries and Real-Time Streaming
+
+TODO this is mostly a division into cases, what kinds of things the language supports and 
 
 ## Imperative Language Support
 
+TODO I want this to essentially be a way of executing queries, without having to build/parse SQL strings, and help cast them to the types that users want to run calculations over, like numpy arrays or that nd thing that I remember seeing geo people really excited about
+
 ## Tile Delivery Network
+
+TODO is this third party CDN? Nodes serving data from inside your network? Just putting tiles into objects and serving them over cloud URLs? Any processing that has to be done, you can do inside your processing cluster, right?
+
+The other question here is tile processing, which is missing entirely from this document. Obviously this can't be SQL. Should it be shaders? Who executes the shaders?
 
 ## Embeddable, Programmable Visualizer
 
+TODO this is a 2D rendering engine for tile and vector data that runs in a native app using C/Vulkan or on the web with Emscripten/WebGPU. 
+
 ## Projects and Version Control
+
+TODO define some kind of project object model, introduce CRDTs for common operations, describe a database scheme for tracking version history
 
 ## Terrascale.io
 
-
-
+TODO first party hosting for all this stuff. Billing and stuff.
