@@ -48,7 +48,15 @@ Kinds of queries we expect and optimize for include...
 
 ## Storage Model
 
-TODO this is layered. The lowest level is tiered abstractions over block and object storage devices identified by URIs. The next level is a replication, erasure coding, checksumming and encrypting protection layer. The top level is higher-level storage primitives like logs with linked runs and key-value catalogs for schema information.
+TerrascaleDB's cloud native storage model features tiered abstractions over underlying storage, allowing efficient utilization of a variety of cloud-native and local unstructured data storage systems. Although we initially intend TerrascaleDB to run on the cloud and use cloud-native object and block stores, we anticipate a future need to run TerrascaleDB locally, e.g. as a small cluster of nodes inside a ruggedized box. As such, the TerrascaleDB storage model is flexible, abstract and software-defined.
+
+TerrascaleDB's storage plane consists of the following layer stack:
+
+* A bottommost **store layer** abstracts over block and object stores
+* On top of that, a **protection layer** provides replication, erasure coding, checksums and encryption
+* At the top is the **abstraction layer** which implements append-only logs and key-value stores
+
+TODO so uh, how exactly does this work anyways? For the store layer, we need a URI scheme, we need abstract APIs over a block or an object storage system. For the protection layer, the main question is whether we can provide protection semantics at the object and/or block level, or if we need to integrate protection into higher layer abstractions. And, for the abstraction layer, we need to detail the abstractions we provide. For example, the append-only logs can either run on contiguous blocks in a block store as as a single incrementally built object in an object store ... or, do we really have to create objects once only on some providers? It seems I have some research to do here.
 
 ## Indexing Structures
 
