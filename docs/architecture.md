@@ -112,6 +112,12 @@ In TerrascaleDB, the column index for a given column is an LSM Tree which maps c
 
 
 
+### Geospatial Indexing
+
+TODO all we need to say here is that nothing special happens; rows are indexed by primary key, and we don't support geospatial primary keys. The interesting part is what we do with columns, which is to compute bounding boxes and store them as overlapping ranges with one dimension per column, with range breakdown to handle overlaps. This allows us to index by bounding box by finding overlapping ranges in each column, and taking the set intersection of all row sets to get a set of all items which are near the bounding box. The query layer must then do fast-rejects on the 'actual' query bounding boxes and then any detailed join algorithms, which may be accelerated for large sets using spatial structures like kd-trees. 
+
+We don't implement r-trees or anything else. It may be worth documenting some of the old ideas I had around geospatial z-ordered octrees which can be managed using an LSM strategy, as something we could consider if we ever found a compelling use case.
+
 ## Aggregate Analysis
 
 TODO Anything you can do on unsorted columnar data, you can also do on an inverted index. When you come across a column value in an inverted index, you repeat whatever you would have done with your columnar forward index as many times as there are matching bits in the bitset.
