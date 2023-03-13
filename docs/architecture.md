@@ -1,30 +1,36 @@
+# Terrascale: Planet-Scale Analytics
+
 Terrascale is a cloud-native data storage, analysis and visualization engine with first-class support for geospatial data and real-time streaming. It includes
 
 * An HTAP database with ANSI SQL support and Python programmability
-* First-class support for geospatial vector data and raster imaging
+* First-class support for geospatial vector data and raster images
 * First-class support for incremental queries over real-time data
 * A programmable, embeddable visualizer for scalar, vector-image and raster-image queries
 * A collaborative editor with real-time, CRDT-resolved edits and version history
 * Source data snapshots and version control
 
-Terrascale is designed to support a variety of user scenarios online operations and offline analysis of real-world data. Key scenarios include operation support, such as tracking and building custom real-time visualization, monitoring and alerting for autonomous vehicles and robots operating in the real world, as well as scientific sensor analysis. Terrascale is not a GIS suite, but forms a potential basis for one.
+Terrascale is designed to support a variety of user scenarios involving real-world data and measurements, including online operations and offline analysis, all on a single dataset. For example, a customer might use Terrascale to build realtime monitoring, visualization and alerting for autonomous vehicles, then analyze their operational data for trend insights. Others might use Terrascale to integrate satellite raster data with on-the-ground sensors data collected in real time via an IoT network, to feed online or offline analysis and monitoring. Terrascale is well suited for geographic analysis scenarios, but it is not a full GIS suite; however, its extensible programming model allows it to act as a potential basis for one.
 
 Terrascale consists of the following software components:
 
 * TerrascaleDB, a cloud-native distributed storage and query engine
-* The Terrascale Tile Delivery Network (TDN), a CDN for raster image tiles
-* The Terrascale Visualizer, a high-performance in-browser rendering engine
-* Terrascale Projects, a real-time collaborative, version-controlled studio for analysis project
+* The Tile Delivery Network (TDN), a CDN for raster image tiles
+* Terrascale's Visualizer, a high-performance in-browser 2D rendering engine and database client
+* Terrascale Projects, a real-time collaborative, version-controlled studio for scientific analysis
 * The Terrascale API, which provides frontend and backend programability for the above
-* Terrascale, an in-browser webapp which unifies the experiences above
+* Terrascale, an in-browser webapp which provides a unified experience for all the above
+
+Although the initial build of Terrascale will be optimized for cloud computing scenarios, we plan to design up front to make it feasible to deploy Terrascale on the edge as a ruggedized portable box containing a small cluster of compute/storage nodes running Terrascale. For example, we abstract away cloud-native storage systems and compute orchestration APIs to make it simpler to build a local clustering system, and we have designed Terrascale to work with a very small number of compute nodes. Fully lighting up this scenario would also involve the introduction of a new synchronization engine, allowing a user to select subsets of their cloud dataset to take with them on the go; this is out of scope for this document.
+
+In this document, we will build from the bottom up, starting from Terrascale's cloud-native data management and tile rendering architecture, then moving onto client-side experiences such as the visualization engine and extensibility points, and finally onto the Projects experience hosted on Terrascale's website.
 
 ## Cloud Provisioning
 
-Terrascale is a multi-tenant service through which customers manage single-tenant compute and storage primitives stored in a third-party cloud such as AWS, Azure or GCP. The model is similar to Snowflake's virtual warehouse concept. This gives customers fine-grained control over the compute-vs-cost tradeoff, and isolates compute- and I/O-heavy analytical queries to individual customers.
+Terrascale is a multi-tenant service through which customers manage single-tenant TerrascaleDB instances running in a third-party cloud such as AWS, Azure or GCP. In this way, a TerrascaleDB cluster is similar to Snowflake's virtual warehouse concept. This gives customers fine-grained control over the compute-vs-cost tradeoff, and isolates resource-intensive analytical queries to the customer's private compute cluster. This alsso providess strong isolation of customer data for security-sensitive scenarios than a multi-tenant compute cloud could provide.
 
 ## Database Workloads
 
-Terrascale is a hybrid transactional/analytical database with support for high-volume short-lived transactional queries in tandem with low-volume long-lived analytical (cross-tabulation) queries. Analytical queries can be run as a single finite request, or incrementally over real-time streaming data. Users can independently scale compute and storage resources as a means to control the cost-performance tradeoff.
+TerrascaleDB is a hybrid transactional/analytical database with support for high-volume short-lived transactional queries in tandem with low-volume long-lived analytical (cross-tabulation) queries. Analytical queries can be run as a single finite request, or incrementally over real-time streaming data. Users can independently scale compute and storage resources as a means to control the cost-performance tradeoff.
 
 Kinds of queries we expect and optimize for include...
 
@@ -42,7 +48,7 @@ Kinds of queries we expect and optimize for include...
 
 ## Storage Model
 
-TODO this is layered. The lowest level is abstractions over block and object storage devices identified by URIs. The next level is a replication, erasure coding, checksumming and encrypting protection layer. The top level is higher-level storage primitives like logs and key-value catalogs for schema information.
+TODO this is layered. The lowest level is tiered abstractions over block and object storage devices identified by URIs. The next level is a replication, erasure coding, checksumming and encrypting protection layer. The top level is higher-level storage primitives like logs with linked runs and key-value catalogs for schema information.
 
 ## Indexing Structures
 
