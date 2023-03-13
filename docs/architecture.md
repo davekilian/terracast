@@ -50,6 +50,24 @@ Kinds of queries we expect and optimize for include...
 
 TerrascaleDB's cloud native storage model features tiered abstractions over underlying storage, allowing efficient utilization of a variety of cloud-native and local unstructured data storage systems. Although we initially intend TerrascaleDB to run on the cloud and use cloud-native object and block stores, we anticipate a future need to run TerrascaleDB locally, e.g. as a small cluster of nodes inside a ruggedized box. As such, the TerrascaleDB storage model is flexible, abstract and software-defined.
 
+---
+
+TODO FIXME per the notes below. I think we *just* abstract over cloud storage and rely on those for replication and/or erasure coding. In the future, if we ever support a ruggedized box kind of scenario where we run on our own hardware, then our internal block/object store abstractions over local file systems have to include a replication and/or erasure coding scheme locally within the abstraction.
+
+We still need our own checksums, and encryption needs to be on our radar.
+
+I need to double-check, but I think I was also wrong to assume it's possible to continually append to an object; I suspect an S3 object is truly one and done. That means we need to support a destaging process by which an incrementally built log in a block store can be destaged to an object once it's "done" being built. This is how the LSM layer would handle checkpoints, for example.
+
+I also don't know exactly how we'd want to do key-value stores for things like database catalogs. Probably these are just overwriting objects in an object store using some kind of versioning scheme.
+
+Handling eventual consistency in S3 is a problem.
+
+Managing S3 buckets / blob containers / etc is another problem.
+
+We may need a separate metadata store to track what exists, what needs cleaning up, and what we need to not forget exists in an eventually consistent store, but that adds another degree of complexity I'd like to avoid. I suppose this is why Snowflake has so many blogs about FDB ... it's probably acting as this bookkeeping system.
+
+---
+
 TerrascaleDB's storage plane consists of the following layer stack:
 
 * A bottommost **store layer** abstracts over block and object stores
