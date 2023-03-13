@@ -82,7 +82,45 @@ I think, if object stores are truly one-and-done, then a simple strategy might b
 
 ## Indexing Structures
 
+TerrascaleDB indexes data using a log-structured merge strategy which combines row-oriented and columnar inverted indexing. At lower levels of the LSM Tree, rows are indexed only in a row-oriented tree sorted by the table's primary key; at deeper levels of the LSM Tree, this row-oriented format is cross-merged into separate a separate row-oriented B+ Tree sorted by primary key, and per-column LSM-Trees which use an inverted indexing scheme similar to Apache Druid. The rows themselves are stored outside the tree, and are managed using copy-forward garbage collection. Some aggregate information is stored inside these columnar LSM Trees to accelerate SQL aggregate queries.
+
+### The Row Index
+
+
+
+### The Column Index
+
+
+
+### Write-Ahead, Checkpoint and Merge
+
+
+
+### Garbage Collection
+
+
+
+### Queries and Access Paths
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+---
+
 TODO this is an LSM-tree on replicated block storage which after checkpointing gets re-sorted into a Druid-like columnar inverted index optimized for aggregate functions. The rows are logged to a WAL and then linked into a logical log which is managed with copy-forward GC. A row LSM and columnar inverted LSMs which point into this row log. The columnar index is a B+ tree and the leaf nodes have (value, ptr) pairs, where the ptr either points to a single row if only one hit, or a bitmap for multiple. 
+
+---
 
 ## Aggregate Analysis
 
