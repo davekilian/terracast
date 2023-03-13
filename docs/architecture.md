@@ -128,7 +128,7 @@ But that's fine, I think we document two schemes. If it's possible to predicate 
 
 ## Query Path Selection and Optimization
 
-## Distributed SQL Queries
+## Distributed Queries
 
 TODO this is raft for distributed commit of transactions. A good question is who plans and optimizes the query. It could be a random node in the network, or it could be the raft leader (if that wouldn't be a bottleneck, at least the leader is always up to date, right?) or it could be a multi-tenant cloud orchestration service sitting in front of the cluster (but I'd rather do everything in the cluster if possible, since we want to keep open the possibility of shipping a small cluster of nodes in a box).
 
