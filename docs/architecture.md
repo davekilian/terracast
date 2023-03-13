@@ -58,6 +58,10 @@ TerrascaleDB's storage plane consists of the following layer stack:
 
 TODO so uh, how exactly does this work anyways? For the store layer, we need a URI scheme, we need abstract APIs over a block or an object storage system. For the protection layer, the main question is whether we can provide protection semantics at the object and/or block level, or if we need to integrate protection into higher layer abstractions. And, for the abstraction layer, we need to detail the abstractions we provide. For example, the append-only logs can either run on contiguous blocks in a block store as as a single incrementally built object in an object store ... or, do we really have to create objects once only on some providers? It seems I have some research to do here.
 
+One thing worth noting is that I'm thinking about this in a very XStore way; the fact is, cloud blocks and objects are already replicated for us, so questions about protection really come down to situations where we run on local clusters. So we likely can get away with abstracting over block stores and object stores, and only thinking about replication and erasure coding for on-prem block/object storage.
+
+I think, if object stores are truly one-and-done, then a simple strategy might be to implement append-only logs on block storage only, and support idempotent archival of a log or section of a log to an object. The LSM engine can then incrementally checkpoint pages to a log and, when done, lazily destage that log section to an object and collect the underlying extents.
+
 ## Indexing Structures
 
 TODO this is an LSM-tree on replicated block storage which after checkpointing gets re-sorted into a Druid-like columnar inverted index optimized for aggregate functions. The rows are logged to a WAL and then linked into a logical log which is managed with copy-forward GC. A row LSM and columnar inverted LSMs which point into this row log. The columnar index is a B+ tree and the leaf nodes have (value, ptr) pairs, where the ptr either points to a single row if only one hit, or a bitmap for multiple. 
