@@ -54,7 +54,7 @@ TerrascaleDB's cloud native storage model features tiered abstractions over unde
 
 ---
 
-TODO FIXME per the notes below. I think we *just* abstract over cloud storage and rely on those for replication and/or erasure coding. In the future, if we ever support a ruggedized box kind of scenario where we run on our own hardware, then our internal block/object store abstractions over local file systems have to include a replication and/or erasure coding scheme locally within the abstraction.
+TODO FIXME I think we *just* abstract over cloud storage and rely on those for replication and/or erasure coding. In the future, if we ever support a ruggedized box kind of scenario where we run on our own hardware, then our internal block/object store abstractions over local file systems have to include a replication and/or erasure coding scheme locally within the abstraction.
 
 We still need our own checksums, and encryption needs to be on our radar.
 
@@ -68,43 +68,17 @@ Managing S3 buckets / blob containers / etc is another problem.
 
 We may need a separate metadata store to track what exists, what needs cleaning up, and what we need to not forget exists in an eventually consistent store, but that adds another degree of complexity I'd like to avoid. I suppose this is why Snowflake has so many blogs about FDB ... it's probably acting as this bookkeeping system.
 
----
-
-TerrascaleDB's storage plane consists of the following layer stack:
-
-* A bottommost **store layer** abstracts over block and object stores
-* On top of that, a **protection layer** provides replication, erasure coding, checksums and encryption
-* At the top is the **abstraction layer** which implements append-only logs and key-value stores
-
-TODO so uh, how exactly does this work anyways? For the store layer, we need a URI scheme, we need abstract APIs over a block or an object storage system. For the protection layer, the main question is whether we can provide protection semantics at the object and/or block level, or if we need to integrate protection into higher layer abstractions. And, for the abstraction layer, we need to detail the abstractions we provide. For example, the append-only logs can either run on contiguous blocks in a block store as as a single incrementally built object in an object store ... or, do we really have to create objects once only on some providers? It seems I have some research to do here.
-
-One thing worth noting is that I'm thinking about this in a very XStore way; the fact is, cloud blocks and objects are already replicated for us, so questions about protection really come down to situations where we run on local clusters. So we likely can get away with abstracting over block stores and object stores, and only thinking about replication and erasure coding for on-prem block/object storage.
-
-I think, if object stores are truly one-and-done, then a simple strategy might be to implement append-only logs on block storage only, and support idempotent archival of a log or section of a log to an object. The LSM engine can then incrementally checkpoint pages to a log and, when done, lazily destage that log section to an object and collect the underlying extents.
-
 ## Indexing Structures
 
-TerrascaleDB indexes data using a log-structured merge strategy inspired by design elements featured in Apache Druid and WiscKey.
+TerrascaleDB indexes data using a log-structured merge strategy with elements inspired by Apache Druid and WiscKey.
 
-Like in WiscKey, new rows are logged to a dedicated row log in arrival order, are indexed externally using log-structured merge trees, and are cleaned up using a copy-forward garbage collection scheme. Storing rows out-of-page with respect to the log-structured merge tree index incurs additional read amplification (since rows are not in the tree and must be fetched with an additional read after the tree lookup) but allows for lower write amplification (since the rows themselves do not need to be rewritten with the rest of the tree on checkpoint and merge). This design is particularly well-suited to modern flash memory, which provide good parallel random-read performance but tend to wear out under write-heavy workloads.
+Like in WiscKey, new rows are logged to a dedicated log in arrival order, are indexed externally using log-structured merge trees, and are cleaned up using a copy-forward garbage collection scheme. Storing rows out-of-page with respect to the log-structured merge tree index incurs additional read amplification (since rows are not in the tree and must be fetched with an additional read after the tree lookup) but allows for lower write amplification (since the rows themselves do not need to be rewritten with the rest of the tree on checkpoint and merge). This design is particularly well-suited to modern flash memory, which provide good parallel random-read performance but tend to wear out under write-heavy workloads.
 
 TerrascaleDB uses a dual indexing strategy over this arrival-order row log. One of the indexes is a traditional row-oriented log-structured merge tree which maps row primary keys to the corresponding row positions in the row log. The other index is a columnar inverted index inspired by Apache Druid. The row index is well-suited for answering OLTP queries that request individual rows (including point queries and bounding-box window queries), and the columnar index is well-suited for OLAP (cross-tabulation) queries that feature large-scale aggregation and grouping with potentially complex multidimensional filters.
 
-TerrascaleDB's analytics engine borrows heavily from Druid's columnar inverted index design, which is in turn inspired by document search stores like Apache Lucene. We begin our discussion with a short overview of these ideas since they're less well known:
-
-### Theory: Inverted Columnar Indexing
-
-TODO a traditional row store is good for row lookups but does poorly on cross-tabulation. No simple way to select related rows for an aggregation, any you ignore most of what you read.
-
-A traditional column store stores data in one array per column on disk, where the $i^{th}$ entry in an on-disk column array is the value for that column in the $i^{th}$ row. In this scheme, you can reconstruct the $i^{th}$ row by reading the $i^{th}$ entry of each column array separately and concatenating the resulting values to get back the original row. This tends to work well for queries which run aggregate functions like min, max, and average over a single column, since all the values that need to be calculated on appear in a single array, with no unrelated data in the same file. The simple structure of these files also makes them highly compressible, which further saves I/O bandwidth in a large analytical query.
-
-In a Druid-like inverted column store, columns are instead indexed by their values. This means each entry is a key-value pair mapping (the value that appears for this column in one or more rows of the table) to (indexes of rows which have this value for this column). For example, if an $Addresses$ table had a column $City$, and the $i^{th}$ row had the value $Bellevue$ for $City$, then the $City$ column index of the $Addresses$ table would map the value $Bellevue$ to a set of row IDs including $i$, since row $i$ has $City=Bellevue$. This scheme is particularly effective when a column value appears in many rows, but can still decay gracefully for values that appear only once per table. The set of row IDs for a given column is usually stored in a compressed bitmap structure such as Roaring Bitmaps.
-
-In TerrascaleDB, the column index for a given column is an LSM Tree which maps column values to a set of matching rows. The leaf level of this LSM Tree uses very wide pages (multiple megabytes per page), which are further compressed, like a traditional column log. For values that only appear in a few rows, the row numbers are stored directly in the tree; for larger row sets, the rows are stored out of page using a roaring bitmap. For each row set, a result count is stored directly in the tree to facilitate fast aggregation.
-
-TODO this is where we should now talk about how you use the columnar structure for efficient aggregation. For example, min and max are a simple search for the low and high end of the tree respectively; counts can be computed by walking the leaf levels and summing counts; sums can be computed by summing (column value * result count), averages are just sum divided by count, and so on. Rank and percentile estimations are still difficult.
-
 ### The Row Log
+
+TODO append-only log used for acknowleding writes and recovery and becomes the long-term row storage. But we have to be able to remove parts of it and move that to objects. So maybe it's not that simple. Maybe the row log and the write ahead log are separate.
 
 
 ### Memory Tables
@@ -112,6 +86,14 @@ TODO this is where we should now talk about how you use the columnar structure f
 ### Row Tables
 
 ### Column Tables
+
+---
+
+Old content moved here:
+
+In TerrascaleDB, the column index for a given column is an LSM Tree which maps column values to a set of matching rows. The leaf level of this LSM Tree uses very wide pages (multiple megabytes per page), which are further compressed, like a traditional column log. For values that appear only in a few rows, the row numbers are stored directly in the tree; for larger row sets, the rows are stored out of page using a roaring bitmap. For each row set, a result count is stored directly in the tree to facilitate fast aggregation.
+
+---
 
 ### Write-Ahead, Checkpoint and Merge
 
