@@ -104,7 +104,7 @@ You know, this doesn't really play nice with roaring bitmaps anyways. The index 
 
 ---
 
-So I guess the right design is a log, segmented at maybe 64-256MB per segment, where each segment is internally indexed by a B+ tree mapping (globally unique 64-bit row ID) to (offset of that row within this segment file). Then on database load we can always query all segments which exist, read each segment's footer, and use that as the basis of building an in-memory cache of the row store?
+So I guess the right design is a log, segmented at maybe 64-256MB per segment, where each segment is internally indexed by a B+ tree mapping (globally unique 64-bit row ID) to (offset of that row within this segment file). Then on database load we can always query all segments which exist, read each segment's footer, and use that as the basis of building an in-memory cache of the row store? Then garbage collection scans create occupancy statistics per segment that get persisted to the catalog, and the collection process picks low-occupancy segments and copies active rows into a new segment, and writes a differential tree into the LSM history just ahead of the LSM tree snapshot we were operating over. All that remains after that is to find a way to write segments out of LSN order, since these newly rewritten rows need new row IDs but so do incoming transactions as well.
 
 ### Memory Tables
 
