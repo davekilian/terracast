@@ -28,6 +28,8 @@ In this document, we will build Terrascale from the bottom up, starting from our
 
 Terrascale is a multi-tenant service through which customers manage single-tenant TerrascaleDB instances running in a third-party cloud such as AWS, Azure or GCP. In this way, TerrascaleDB clusters are similar to Snowflake's virtual warehouse concept. This gives customers fine-grained control over the compute-vs-cost tradeoff, and isolates resource-intensive analytical queries to the customer's private compute cluster. This also provides strong isolation of customer data for security-sensitive scenarios than a multi-tenant compute cloud could provide.
 
+TODO our brain needs to understand VM geometry so we can programmatically deploy clusters where each VM has access to the right durable disk device.
+
 ## Database Workloads
 
 TerrascaleDB is a hybrid transactional/analytical database with support for high-volume short-lived transactional queries in tandem with low-volume resource-intensive analytical (cross-tabulation) queries. Queries can execute on a finite point in time, or update continually over real-time streaming data. Users can independently scale compute and storage resources as a means to control the cost-performance tradeoff of their queries.
@@ -54,8 +56,8 @@ TerrascaleDB includes a thin storage abstraction layer responsible for interfaci
 
 The storage layer defines three kinds of storage:
 
-* **Block devices** provide a high-cost, low-latency file system with write-in-place semantics. Some block devices are **durable**, making them appropriate for staging customer data. Others are **volatile**, making them appropriate for cache-spilling, staging external writes and storing intermediate results
-* **Object stores** provide low-cost, high latency buckets of write-once unstructured data objects. Depending on the implementation, object stores may be strongly consistent or eventually consistent; as such, the object store abstraction is always exposed as eventually consistent.
+* **Block devices** provide a high-cost, low-latency file system with write-in-place semantics. Some block devices are **durable**, making them appropriate for staging customer data. Others are **volatile**, making them appropriate for cache-spilling, staging external writes and storing intermediate results. Block devices are strongly affinitized to a single node in the cluster.
+* **Object stores** provide low-cost, high latency buckets of write-once unstructured data objects. Depending on the implementation, object stores may be strongly consistent or eventually consistent; as such, the object store abstraction is always exposed as eventually consistent. Object stores are not affinitized to nodes, and are often used for cross-node sharing.
 * **Catalogs** are small, strongly consistent key-value stores. These can be used for bookkeeping information needed to detect and correct for object store eventual consistency artifacts, and are also appropriate for other bookkeeping, like the set of tables which exist and their schemas.
 
 The indexing layer consumes this storage model for storing TerrascaleDB's row data and log-structured merge index. Client writes are staged in a write-ahead log stored on a durable block device, and runs of log-structured merge trees are staged to volatile block devices during the checkpointing and merge processes. These structures are lazily destaged into object-store objects and read back in through a tiered memory / volatile block store cache. One catalog store per database instance is used to track tables, schemas, durable block files of note (e.g. the WAL), object store objects (such as the row store and LSM runs), and information needed to recover the WAL (such as replay start pointer).
@@ -63,6 +65,8 @@ The indexing layer consumes this storage model for storing TerrascaleDB's row da
 In the cloud, durable block devices are cloud block stores such as EBS or managed disks accessed through a local file system. Volatile block devices are locally-attached disk instances, also accessed through the local file system. Object stores wrap cloud object stores like S3 and block blobs. Catalogs wrap cloud-native table storage like DynamoDB or Azure's tables. 
 
 In the future, TerrascaleDB may be extended to run on small clusters of hardware nodes (e.g. an on-the-go ruggedized 'edge' offering). In this setup, durable block devices and object stores might be implemented as a custom replicated protection protocol over physical disks, with n-way replication for durable block storage and Reed-Solomon erasure coding for objects. Volatile block devices might be implemented as non-protected disk storage (no replication or erasure coding). Catalogs might be implemented using a third-party / open-source database running on each node in the cluster.
+
+TODO a global URI scheme so e.g. a catalog can point to data across different storage subsystems. Example: a row store segment may exist in durable block storage or an object store; the catalog uses a URI to identify which kind of store the segment is currently in and where it is within that store.
 
 TODO Where do checksums live? Can this layer checksum by itself, or are we relying on the higher level layers to decide where in the file checksums go? It's possible for a GFS-like stream to manage checksums automatically, but we don't have structured append-only storage. And we likely have file system checksumming underneath us too, but we want to checksum as early as possible and pass checksums down the stack as far as we can. I think there are relatively reasonable checksumming strategies for the indexing layer, like per log flush buffer and per-b-tree page, so it's not a disaster if we push checksumming up a level. But if we can make it transparent at this layer, that's nice. One of the problems with transparent checksumming is this layer doesn't know the read block size of the parent.
 
@@ -84,27 +88,32 @@ This section begins with an overview of the different on-disk structures that st
 
 ### The Row Store
 
-TODO this is an incrementally-built B+ tree which maps unique row identifiers to full row blobs. The row index and column index both refer to rows by their row numbers in this store. But this probably can't be as simple as a B+ tree if we want to support copy-forward GC, unless we're willing to copy-on-write the B+ pages themselves, which, idk, maybe we are. Another pretty big question is the write combining scheme. Sit on this a little more.
+TODO here's a quick draft:
 
-Also need to cover a row ID scheme. A row ID should be for an immutable row; that is, if you do a SQL update on an existing row, it causes invalidation of the old row ID and the allocation of a new row ID. But the invalidation of the old row ID is 'implicit' in there no longer being any entry in any tree that references it; that's the point of the GC scheme. We also need to handle some kind of exhaustion/rollover/epoch scheme, unless we're certain nobody could ever exceed 64 bits of row data. Even then, 64 bits of row data kind of breaks the design for roaring bitmaps, so it'd be nice if we could find a way to do 32 bits plus some extra shared epoch or generation bits or something to make 64 bits with only 32 bits of variability ... somehow. Or if we can get away with only 48 bits, maybe a two-level roaring bitmap scheme would be ok.
+* The row store is an unordered collection of append-only segments
+* Segments contain raw row value tuples
+* Segments may be stored as files in durable block storage
+* Segments may be stored as objects in object storage
+* An active segment is still being built; you can append new rows to one
+* Active segments can only be stored on block storage devices
+* A sealed segment is done; you cannot modify it ever again
+* Sealed segments initially exist in block storage, but are later offloaded to object storage
+* Segment metadata is tracked in the database's catalog
+* Catalog metadata includes allocated segment IDs, seal state, and URI to underlying files
+* Entries in the log are indexed by a 64-bit row identifiers (rowids)
+* Rowids are globally unique in the context of a single database table
+* A 64-bit rowid is split into a 32-bit table-global segment ID and a 32-bit segment-local entry ID
+* The catalog tracks which 32-bit table-global segment IDs are allocated
 
-Also, the row store doubles as our write-ahead log, so it should be okay to put extra opaque data in-page along with each row. That's where we store information for replay, like transaction LSN or whatever the scheme ends up being.
+I need to leave to get Max but
 
-Also, I'd like to avoid flushing the internal pages of the row store until each is full. Is there a scheme that does that efficiently? Otherwise we're going to RMW an index page every time we flush a new leaf page, which isn't all that nice in terms of write amplification.
+* With the high bits not having an order-related meaning, we're now free to have multiple active segs
+* That in turn makes it very feasible to have active GC segs in parallel with active write-ahead segs
+* If we wish, we can demote the segid to 16 bits if it helps make the bitmaps smaller
 
----
+We also need to support opaque metadata alongside each individual row, so we can piggypack write-ahead information in this store and use it for recovery when a table partition is loaded.
 
-I don't know if a B+ tree really helps me with garbage collection here. Maybe a better design really is some kind of segmented log. In order to play nice with roaring bitmaps, we can make a logical LSN (64-bits) into a 32-bit log segment number and a 32-bit row ID, which is the row index within the log segment. You can write a single log segment out to an object store. The footer of a log segment has a list of backpointers mapping each row in the segment to its physical offset within the segment. That allows us to selectively cache portions of a log segment in memory. Which is good, because if a log segment is allowed to grow up to 4 billion rows long, it's tens of gigabytes in size.
-
-We may instead want to further bound the size of a log segment, in bytes or rows or both. For example, 16 bits per row ID within a log segment would get you up to 64K rows, which with 128 bytes or so per row gets you to roughly 8MB log segments. Is that too small? It's certainly cache-friendly insofar as you can fit the whole thing in memory without too much trouble.
-
-Anyways, with this structure, copy-forward garbage collection just adds new log segments to the virtual log and deallocates old segments, and the index is updated to use the new row IDs in the new log segments.
-
-You know, this doesn't really play nice with roaring bitmaps anyways. The index needs virtual LSN numbers which are 64-bit no matter how you look at it. The only way to get the row ID size outside the log down to 32 bits is to segment the index too. I don't know if I really like that.
-
----
-
-So I guess the right design is a log, segmented at maybe 64-256MB per segment, where each segment is internally indexed by a B+ tree mapping (globally unique 64-bit row ID) to (offset of that row within this segment file). Then on database load we can always query all segments which exist, read each segment's footer, and use that as the basis of building an in-memory cache of the row store? Then garbage collection scans create occupancy statistics per segment that get persisted to the catalog, and the collection process picks low-occupancy segments and copies active rows into a new segment, and writes a differential tree into the LSM history just ahead of the LSM tree snapshot we were operating over. All that remains after that is to find a way to write segments out of LSN order, since these newly rewritten rows need new row IDs but so do incoming transactions as well.
+The last question here is how indexing works within a segment. Obviously a fully processed segment in object storage can just be a log of row IDs followed by a B+ index, followed by a metadata footer that points backwards to the root of the tree and also says where the B+ index is in memory. That allows us to (a) just load the footer to figure out where the tree is, (b) demand load index pages for a segment as needed and (c) page in the full B+ tree index if we ever need to.
 
 ### Memory Tables
 
@@ -163,6 +172,8 @@ TODO go read redbook.io - Volcano maybe was the major paper in this space?
 ## Distributed Queries
 
 TODO this is raft for distributed commit of transactions. A good question is who plans and optimizes the query. It could be a random node in the network, or it could be the raft leader (if that wouldn't be a bottleneck, at least the leader is always up to date, right?) or it could be a multi-tenant cloud orchestration service sitting in front of the cluster (but I'd rather do everything in the cluster if possible, since we want to keep open the possibility of shipping a small cluster of nodes in a box).
+
+What's the partitioning strategy? I assume this is single-coordinator, not quorum-writes per row. Then how do we do splits and merges?
 
 ## Geospatial
 
