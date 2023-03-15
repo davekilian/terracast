@@ -102,9 +102,9 @@ Anyways, with this structure, copy-forward garbage collection just adds new log 
 
 You know, this doesn't really play nice with roaring bitmaps anyways. The index needs virtual LSN numbers which are 64-bit no matter how you look at it. The only way to get the row ID size outside the log down to 32 bits is to segment the index too. I don't know if I really like that.
 
-Maybe I wandered into an open problem here.
+---
 
-
+So I guess the right design is a log, segmented at maybe 64-256MB per segment, where each segment is internally indexed by a B+ tree mapping (globally unique 64-bit row ID) to (offset of that row within this segment file). Then on database load we can always query all segments which exist, read each segment's footer, and use that as the basis of building an in-memory cache of the row store?
 
 ### Memory Tables
 
@@ -119,6 +119,8 @@ TODO it's probably worth pointing out at some point that it's possible for users
 ### Column Tables
 
 TODO this is an LSM tree where keys are unique column values that appear in the tree, and the values are row ID lists &mdash; can be in-page for just a few results or an external pointer to a dedicated roaring bitmap page if there's more than just a few. Each entry also stores an up-to-date entry count. For differential trees, you also need a way to specify a set of rows that were deleted from the system so they can't be found in older trees. This should be a separate, optional delete list which is again either a sparse list or a full roaring bitmap.
+
+So far it's seeming likely we'll be using 64-bit row IDs, in which case https://github.com/RoaringBitmap/RoaringFormatSpec specifies extensions for 64-bit row numbers.
 
 ### Write-Ahead, Checkpoint and Merge
 
