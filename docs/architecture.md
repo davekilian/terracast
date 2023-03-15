@@ -9,7 +9,7 @@ Terrascale is a cloud-native data storage, analysis and visualization engine wit
 * A collaborative editor with real-time, CRDT-resolved edits and version history
 * Source data snapshots and version control
 
-Terrascale is designed to support a variety of user scenarios involving real-world data and measurements, including online operations and offline analysis, all on a single dataset. For example, a customer might use Terrascale to build realtime monitoring, visualization and alerting for autonomous vehicles, then analyze their operational data for trend insights. Others might use Terrascale to integrate satellite raster data with on-the-ground sensors data collected in real time via an IoT network, to feed online or offline analysis and monitoring. Terrascale is well suited for geographic analysis scenarios, but it is not a full GIS suite; however, its extensible programming model allows it to act as a potential basis for one.
+Terrascale is designed to support a variety of user scenarios involving real-world data and measurements, including online operations and offline analysis, all on a single dataset. For example, a customer might use Terrascale to build realtime monitoring, visualization and alerting for autonomous vehicles, then run large-scale analysis to mine their operational data for trend insights. Others might use Terrascale to integrate satellite raster data with on-the-ground sensors data collected in real time via an IoT network, to feed online or offline analysis and/or monitoring. Terrascale is well suited for geographic analysis scenarios, but it is not a full GIS suite; however, its extensibility model allows it to act as a potential basis for one.
 
 Terrascale consists of the following software components:
 
@@ -20,9 +20,9 @@ Terrascale consists of the following software components:
 * The Terrascale API, which provides frontend and backend programability for the above
 * Terrascale, an in-browser webapp which provides a unified experience for all the above
 
-Although the initial build of Terrascale will be optimized for cloud computing scenarios, we plan to design up front to make it feasible to deploy Terrascale on the edge as a ruggedized portable box containing a small cluster of compute/storage nodes running Terrascale. For example, we abstract away cloud-native storage systems and compute orchestration APIs to make it simpler to build a local clustering system, and we have designed Terrascale to work with a very small number of compute nodes. Fully lighting up this scenario would also involve the introduction of a new synchronization engine, allowing a user to select subsets of their cloud dataset to take with them on the go; this is out of scope for this document.
+Although the initial build of Terrascale will be optimized for cloud computing scenarios, we plan to design up front to make it feasible to deploy Terrascale on the edge, as (for example) a ruggedized box housing a small cluster of compute/storage nodes running Terrascale. We abstract away cloud-native storage systems and compute orchestration APIs to make it simpler to build a local clustering system, and we have designed Terrascale to work with a very small number of compute nodes from the start. Fully lighting up this scenario would require additional currently-off-roadmap work, such as a synchronization engine for moving portions of datasets between the edge and the cloud, as well as implementations of our storage-layer abstractions suitable for use on bare-metal clusters.
 
-In this document, we will build from the bottom up, starting from Terrascale's cloud-native data management and tile rendering architecture, then moving onto client-side experiences such as the visualization engine and extensibility points, and finally onto the Projects experience hosted on Terrascale's website.
+In this document, we will build Terrascale from the bottom up, starting from our cloud-native data management and tile rendering architecture, then moving onto client-side experiences such as the visualization engine and extensibility surface, and finally onto the Projects experience hosted on Terrascale's website.
 
 ## Cloud Provisioning
 
@@ -46,7 +46,7 @@ Kinds of queries we expect and optimize for include...
 
 **Bulk export**: Customers may wish to do large, point-in-time bulk reads to export data from Terrascale as part of a wider ETL process that copies or backs up Terrascale data to a separate system. Like bulk import, exports need to provide consistency and restartability, whether the latter is achieved through idempotency or a checkpoint/restart protocol.
 
-TODO the date types are expected to be scalar, 1D spatial, multidimensional spatial, time; this is not a document store and is not well-suited for handling semi-structured data.
+TODO the data types are expected to be scalar, 1D spatial, multidimensional spatial, time; this is not a document store and there is no current plan to handle semi-structured data.
 
 ## Storage Model
 
@@ -54,19 +54,24 @@ TerrascaleDB's cloud native storage model features tiered abstractions over unde
 
 ---
 
-TODO FIXME I think we *just* abstract over cloud storage and rely on those for replication and/or erasure coding. In the future, if we ever support a ruggedized box kind of scenario where we run on our own hardware, then our internal block/object store abstractions over local file systems have to include a replication and/or erasure coding scheme locally within the abstraction.
+TODO the lowest level abstractions are
 
-We still need our own checksums, and encryption needs to be on our radar.
+* Durable block storage for write-ahead logging
+* Volatile block storage for staging LSM writes and maybe spilling B+ page cache
+* Object storage for storing LSM trees and big column runs longer term
+* Catalog storage for tracking metadata (tables and schemas, object-storage object versioning)
 
-I need to double-check, but I think I was also wrong to assume it's possible to continually append to an object; I suspect an S3 object is truly one and done. That means we need to support a destaging process by which an incrementally built log in a block store can be destaged to an object once it's "done" being built. This is how the LSM layer would handle checkpoints, for example.
+These have to be abstracted over cloud provider offerings since we intend to be multi-cloud.
 
-I also don't know exactly how we'd want to do key-value stores for things like database catalogs. Probably these are just overwriting objects in an object store using some kind of versioning scheme.
+In the cloud, durable block stores is EBS or page blob (likely accessed through plain file system or direct disk I/O calls), volatile block stores are locally-attached instances or blobcache (again, likely accessed through either file system or direct disk calls). Object stores are S3 or block blob (for S3, we need external bookkeeping to detect/correct eventual-consistency artifacts like disappearing objects). Catalog stores are small structured storage databases like Dynamo or Tables (if the pricing is bad, we may have to consider other options).
 
-Handling eventual consistency in S3 is a problem.
+On our own hardware, durable block stores is file system or direct disk I/O calls with our own internal replication and erasure coding scheme. Volatile block stores is the same, but on fast storage with no replication. Object storage is the same as durable block storage, but the objects are stored in separate files in a file system. Catalog storage is a database running somewhere, can even be as simple as sqlite. Because objects and write-through cache are both just files in a file system, we might want to break abstraction to avoid a separate copy.
 
-Managing S3 buckets / blob containers / etc is another problem.
+Do we need any higher-level abstractions on top of this? Originally, I was considering catalog stores and log stores running on top of a protection layer running on top of raw abstractions; but with cloud-native there's no need for a protection layer, and there is certainly need for a native structured data catalog abstraction so we can reliably track object versions and detect S3 eventual consistency/temporary data loss artifacts. So that means the only higher-level abstraction worth noting is a log, and the only log I have planned in the system is the write-ahead log anyways. There are other things that are 'log-structured' like staging LSM tree data before offloading it to an object store, are just incrementally appending blocks to a file in large chunks. Only the WAL has the problem of needing to buffer writes to avoid RMWs. So I think nix that as an abstraction in this layer and stay laser focused on low level I/O.
 
-We may need a separate metadata store to track what exists, what needs cleaning up, and what we need to not forget exists in an eventually consistent store, but that adds another degree of complexity I'd like to avoid. I suppose this is why Snowflake has so many blogs about FDB ... it's probably acting as this bookkeeping system.
+What might reopen the can of worms is encryption and checksumming. Where do checksums live? Can this layer checksum by itself, or are we relying on the higher level layers to decide where in the file checksums go? It's possible for a GFS-like stream to manage checksums automatically, but we don't have structured append-only storage. And we likely have file system checksumming underneath us too.
+
+
 
 ## Indexing Structures
 
