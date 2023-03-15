@@ -86,21 +86,19 @@ This section begins with an overview of the different on-disk structures that st
 
 TODO this is an incrementally-built B+ tree which maps unique row identifiers to full row blobs. The row index and column index both refer to rows by their row numbers in this store. But this probably can't be as simple as a B+ tree if we want to support copy-forward GC, unless we're willing to copy-on-write the B+ pages themselves, which, idk, maybe we are. Another pretty big question is the write combining scheme. Sit on this a little more.
 
+Also need to cover a row ID scheme. A row ID should be for an immutable row; that is, if you do a SQL update on an existing row, it causes invalidation of the old row ID and the allocation of a new row ID. But the invalidation of the old row ID is 'implicit' in there no longer being any entry in any tree that references it; that's the point of the GC scheme. We also need to handle some kind of exhaustion/rollover/epoch scheme, unless we're certain nobody could ever exceed 64 bits of row data. Even then, 64 bits of row data kind of breaks the design for roaring bitmaps, so it'd be nice if we could find a way to do 32 bits plus some extra shared epoch bits or something to make 64 bits with only 32 bits of variability ... somehow.
+
 ### Memory Tables
 
 TODO I think what I want to do here is to keep row store pages referenced by the memory table resident in memory, and then have the memory table be the same index in an in-memory multi-version binary search tree that it is on disk. Multiversioning with columnar indexing may be quite hard because there's no longer a single bitmap; there's one per version, or there's one bitmap with versioned bits, neither of which is space-efficient. Maybe we can get away with a row-only memory table and emulate columnar by full memory table scans? Maybe we build a columnar memory table lazily? Maybe we have a traditional column store memory table, but an inverted index style on disk?
 
 ### Row Tables
 
+TODO this is probably the easiest part of the system, each of these is just a dense (pages fully utilized) B+ tree on disk, where the keys in the tree are row primary keys and the values are row IDs of rows in the row store.
+
 ### Column Tables
 
----
-
-Old content moved here:
-
-In TerrascaleDB, the column index for a given column is an LSM Tree which maps column values to a set of matching rows. The leaf level of this LSM Tree uses very wide pages (multiple megabytes per page), which are further compressed, like a traditional column log. For values that appear only in a few rows, the row numbers are stored directly in the tree; for larger row sets, the rows are stored out of page using a roaring bitmap. For each row set, a result count is stored directly in the tree to facilitate fast aggregation.
-
----
+TODO
 
 ### Write-Ahead, Checkpoint and Merge
 
