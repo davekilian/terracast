@@ -117,7 +117,8 @@ The last question here is how indexing works within a segment. Obviously a fully
 
 * We could just not index these, and rely on them being pretty small
 * We could maintain separate row data and index files and concatenate them when pushing to object; but natively this requires a write-in-place any time a B+ page is updated. For example, the first row is written, we create a root page with just one entry. When the second row is written, we have to overwrite the root page again because it now has two entries. And so on.
-* We can write only complete B+ pages and forward scan the log for the rest. This might not be so bad if we need all these rows in memory for recovery anyways. But do we? I doubt it.
+* We can write only complete B+ pages and forward scan the log for the rest. This might not be so bad if we need all these rows in memory for recovery anyways. But do we? If we're dual-indexing forwards and backwards, I think we do!
+* So maybe the answer here is the segment size is about limited to how much you want to have to reload on recovery, and we cut a new segment in preparation for checkpointing? Then recovery reads a whole segment. The segments in block storage are not indexed. The segments are indexed as part of offloading them to object storage, which is something you'd do during checkpoint anyways.
 
 ### Memory Tables
 
