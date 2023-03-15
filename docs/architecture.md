@@ -92,6 +92,12 @@ Also, the row store doubles as our write-ahead log, so it should be okay to put 
 
 Also, I'd like to avoid flushing the internal pages of the row store until each is full. Is there a scheme that does that efficiently? Otherwise we're going to RMW an index page every time we flush a new leaf page, which isn't all that nice in terms of write amplification.
 
+---
+
+I don't know if a B+ tree really helps me with garbage collection here. Maybe a better design really is some kind of segmented log. In order to play nice with roaring bitmaps, we can make a logical LSN (64-bits) into a 32-bit log segment number and a 32-bit row ID, which is the row index within the log segment. You can write a single log segment out to an object store. The footer of a log segment has a list of backpointers mapping each row in the segment to its physical offset within the segment. That allows us to selectively cache portions of a log segment in memory. Which is good, because if a log segment is allowed to grow up to 4 billion rows long, it's tens of gigabytes in size.
+
+We may instead want to further bound the size of a log segment, in bytes or rows or both. For example, 16 bits per row ID within a log segment would get you up to 64K rows, which with 128 bytes or so per row gets you to roughly 8MB log segments. Is that too small? It's certainly cache-friendly insofar as you can fit the whole thing in memory without too much trouble.
+
 ### Memory Tables
 
 TODO I think what I want to do here is to keep row store pages referenced by the memory table resident in memory, and then have the memory table be the same index in an in-memory multi-version binary search tree that it is on disk. Multiversioning with columnar indexing may be quite hard because there's no longer a single bitmap; there's one per version, or there's one bitmap with versioned bits, neither of which is space-efficient. Maybe we can get away with a row-only memory table and emulate columnar by full memory table scans? Maybe we build a columnar memory table lazily? Maybe we have a traditional column store memory table, but an inverted index style on disk?
