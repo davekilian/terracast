@@ -72,13 +72,19 @@ TODO what about encryption? Do we manually encrypt all of our own stuff in-proc,
 
 TerrascaleDB indexes data using a log-structured merge strategy inspired by ideas from Apache Druid and WiscKey.
 
-Like in WiscKey, new rows are logged to a dedicated log in arrival order, are indexed externally using log-structured merge trees, and are cleaned up using a copy-forward garbage collection scheme. Storing rows out-of-page with respect to the log-structured merge tree index incurs additional read amplification (since rows are not in the tree and must be fetched with an additional read after the tree lookup) but allows for lower write amplification (since the rows themselves do not need to be rewritten with the rest of the tree on checkpoint and merge). This design is particularly well-suited to modern flash memory, which provide good parallel random-read performance but tend to wear out under write-heavy workloads.
+Like in WiscKey, new rows are logged to a dedicated 'row store' in arrival order, are indexed externally using log-structured merge trees, and are cleaned up using copy-forward garbage collection. Storing rows out-of-page with respect to the log-structured merge tree index incurs additional read amplification (since rows are not in the tree and must be fetched with an additional read after the tree lookup) but allows for lower write amplification (since the rows themselves do not need to be rewritten with the rest of the tree on checkpoint and merge). This design is particularly well-suited to modern flash memory, which provide good parallel random-read performance but provide poor wear characteristics on write-heavy workloads.
 
-TerrascaleDB uses a dual indexing strategy over this arrival-order row log. One of the indexes is a traditional row-oriented log-structured merge tree which maps row primary keys to the corresponding row positions in the row log. The other index is a columnar inverted index inspired by Apache Druid. The row index is well-suited for answering OLTP queries that request individual rows (including point queries and bounding-box window queries), and the columnar index is well-suited for OLAP (cross-tabulation) queries that feature large-scale aggregation and grouping with potentially complex multidimensional filters.
+TerrascaleDB uses a dual indexing strategy over this arrival-order row store. One of the indexes is a traditional row-oriented log-structured merge tree which maps primary keys to the corresponding location in the row store. The other index is a columnar inverted index inspired by Apache Druid. The row index is well-suited for answering OLTP queries that request individual rows (including point queries and bounding-box window queries), and the columnar index is well-suited for OLAP (cross-tabulation) queries that feature large-scale aggregation and grouping with potentially complex multidimensional filters.
 
-### The Row Log
+Dual-indexing enables hybrid transactional/analytical processing, at the cost of doubling the write amplification and storage overhead of a traditional row-only or column-only index. Storing (relatively large) row payloads out-of-page in a separate, garbage-collected row store reduces the write amplification and space overhead of dual-indexing, leading to manageable write/space amplification overhead.
 
-TODO append-only log used for acknowleding writes and recovery and becomes the long-term row storage. But we have to be able to remove parts of it and move that to objects. So maybe it's not that simple. Maybe the row log and the write ahead log are separate.
+TODO column store provides a natural scheme for computing bounding boxes over spatiotemporal data, which can then be further refined with fine-grained collision detection at query time. More detail to follow.
+
+TODO segue with we begin by examining the basic data structures that exist in a TerrascaleDB table and then we talk about basic management operations writing ahead, checkpoint and merge. Finally, we discuss query algorithms for scalar-transactional, scalar-analytical and spatiotemporal data.
+
+### The Row Store
+
+TODO this is an incrementally-built B+ tree which maps unique row identifiers to full row blobs. The row index and column index both refer to rows by their row numbers in this store. But this probably can't be as simple as a B+ tree if we want to support copy-forward GC, unless we're willing to copy-on-write the B+ pages themselves, which, idk, maybe we are. Sit on this a little more.
 
 
 ### Memory Tables
@@ -107,10 +113,6 @@ TODO all we need to say here is that nothing special happens; rows are indexed b
 
 We don't implement r-trees or anything else. It may be worth documenting some of the old ideas I had around geospatial z-ordered octrees which can be managed using an LSM strategy, as something we could consider if we ever found a compelling use case.
 
-### Storage
-
-TODO use block stores for the entire row system, but offload compressed columnar runs to object storage? Requires more thinking
-
 ## Aggregate Analysis
 
 TODO Anything you can do on unsorted columnar data, you can also do on an inverted index. When you come across a column value in an inverted index, you repeat whatever you would have done with your columnar forward index as many times as there are matching bits in the bitset.
@@ -126,6 +128,8 @@ The problem that needs to be solved here is how to rectify an ahead-of-time LSN 
 But that's fine, I think we document two schemes. If it's possible to predicate lock for an RW transaction ahead of time, then the RW transaction simply acquires all predicate locks, waits for all preceding RW or WO transaction, then executes on its own isolated snapshot view of the world. If for some reason that is not feasible for some queries, those must lock the entire WO queue, which sucks but at least we can do some background buffering so when RW finally publishes, all WOs that were waiting on it show up instantly as well.
 
 ## Query Path Selection and Optimization
+
+TODO go read redbook.io - Volcano maybe was the major paper in this space?
 
 ## Distributed Queries
 
