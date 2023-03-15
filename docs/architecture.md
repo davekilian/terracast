@@ -88,6 +88,10 @@ TODO this is an incrementally-built B+ tree which maps unique row identifiers to
 
 Also need to cover a row ID scheme. A row ID should be for an immutable row; that is, if you do a SQL update on an existing row, it causes invalidation of the old row ID and the allocation of a new row ID. But the invalidation of the old row ID is 'implicit' in there no longer being any entry in any tree that references it; that's the point of the GC scheme. We also need to handle some kind of exhaustion/rollover/epoch scheme, unless we're certain nobody could ever exceed 64 bits of row data. Even then, 64 bits of row data kind of breaks the design for roaring bitmaps, so it'd be nice if we could find a way to do 32 bits plus some extra shared epoch or generation bits or something to make 64 bits with only 32 bits of variability ... somehow. Or if we can get away with only 48 bits, maybe a two-level roaring bitmap scheme would be ok.
 
+Also, the row store doubles as our write-ahead log, so it should be okay to put extra opaque data in-page along with each row. That's where we store information for replay, like transaction LSN or whatever the scheme ends up being.
+
+Also, I'd like to avoid flushing the internal pages of the row store until each is full. Is there a scheme that does that efficiently? Otherwise we're going to RMW an index page every time we flush a new leaf page, which isn't all that nice in terms of write amplification.
+
 ### Memory Tables
 
 TODO I think what I want to do here is to keep row store pages referenced by the memory table resident in memory, and then have the memory table be the same index in an in-memory multi-version binary search tree that it is on disk. Multiversioning with columnar indexing may be quite hard because there's no longer a single bitmap; there's one per version, or there's one bitmap with versioned bits, neither of which is space-efficient. Maybe we can get away with a row-only memory table and emulate columnar by full memory table scans? Maybe we build a columnar memory table lazily? Maybe we have a traditional column store memory table, but an inverted index style on disk?
@@ -96,15 +100,25 @@ TODO I think what I want to do here is to keep row store pages referenced by the
 
 TODO this is probably the easiest part of the system, each of these is just a dense (pages fully utilized) B+ tree on disk, where the keys in the tree are row primary keys and the values are row IDs of rows in the row store.
 
+TODO it's probably worth pointing out at some point that it's possible for users to ask us to maintain a secondary index, and we do that as easily as creating a primary index. There's an opportunity to elide an entire row index if it's a single column we already indexed, but that's a micro-optimization we can look into later.
+
 ### Column Tables
 
 TODO this is an LSM tree where keys are unique column values that appear in the tree, and the values are row ID lists &mdash; can be in-page for just a few results or an external pointer to a dedicated roaring bitmap page if there's more than just a few. Each entry also stores an up-to-date entry count. For differential trees, you also need a way to specify a set of rows that were deleted from the system so they can't be found in older trees. This should be a separate, optional delete list which is again either a sparse list or a full roaring bitmap.
 
 ### Write-Ahead, Checkpoint and Merge
 
+TODO write-ahead commits to a row store page in memory; the transaction then gets blocked on the page's flush event. That flush comes either when the page is full, or after the first transaction has been waiting 'too long.' Timed flushes can lead to a single page being flushed multiple times, e.g. every time a timeout occurs or on the final flush once the page is full. We handle this by rewriting in place. We put the raw row value as the row entry in the store, and we put our own recovery information in the opaque entry.
+
+All on-disk row- and column-trees are LSM, and work via standard inorder checkpointing/merging algorithms. Mention that we assume we're checkpointing to local volatile SSD storage before we offload to object storage. As such, a reasonable merge policy is basically just "min completion rate with deadline."
+
 ### Garbage Collection
 
+TODO this is ... hard, as always. The simplest way to do this is naive mark and sweep: walk the live row index to build occupancy statistics (how many bytes of live data divided by how many bytes), pick which object-store objects we want to collect, do another index walk to identify rows that need to be rewritten with a new row ID
+
 ### Queries on Scalar Data
+
+TODO this is pretty standard LSM for transactional. For analytical, we'll discuss it below in the aggregate analysis section
 
 ### Range Breakdown and N-D Bounding Box Queries
 
@@ -123,6 +137,8 @@ TODO this is an LSN-ordered publish log for write-only (WO) transactions, snapsh
 The problem that needs to be solved here is how to rectify an ahead-of-time LSN ordering scheme with long running RW transactions with unpredictable predicate locking. If the predicates can be found ahead of time, we can ensure serializability easily, but if RW transactions can incrementally lock more and more predicates, it's not clear how to let that happen without locking the whole WO publish queue. An RW transaction can
 
 But that's fine, I think we document two schemes. If it's possible to predicate lock for an RW transaction ahead of time, then the RW transaction simply acquires all predicate locks, waits for all preceding RW or WO transaction, then executes on its own isolated snapshot view of the world. If for some reason that is not feasible for some queries, those must lock the entire WO queue, which sucks but at least we can do some background buffering so when RW finally publishes, all WOs that were waiting on it show up instantly as well.
+
+Also, I decided to put off discussing the recovery scheme until here.
 
 ## Query Path Selection and Optimization
 
