@@ -84,10 +84,11 @@ This section begins with an overview of the different on-disk structures that st
 
 ### The Row Store
 
-TODO this is an incrementally-built B+ tree which maps unique row identifiers to full row blobs. The row index and column index both refer to rows by their row numbers in this store. But this probably can't be as simple as a B+ tree if we want to support copy-forward GC, unless we're willing to copy-on-write the B+ pages themselves, which, idk, maybe we are. Sit on this a little more.
-
+TODO this is an incrementally-built B+ tree which maps unique row identifiers to full row blobs. The row index and column index both refer to rows by their row numbers in this store. But this probably can't be as simple as a B+ tree if we want to support copy-forward GC, unless we're willing to copy-on-write the B+ pages themselves, which, idk, maybe we are. Another pretty big question is the write combining scheme. Sit on this a little more.
 
 ### Memory Tables
+
+TODO I think what I want to do here is to keep row store pages referenced by the memory table resident in memory, and then have the memory table be the same index in an in-memory multi-version binary search tree that it is on disk. Multiversioning with columnar indexing may be quite hard because there's no longer a single bitmap; there's one per version, or there's one bitmap with versioned bits, neither of which is space-efficient. Maybe we can get away with a row-only memory table and emulate columnar by full memory table scans? Maybe we build a columnar memory table lazily? Maybe we have a traditional column store memory table, but an inverted index style on disk?
 
 ### Row Tables
 
