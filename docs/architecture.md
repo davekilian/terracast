@@ -58,7 +58,7 @@ The storage layer defines three kinds of storage:
 * **Object stores** provide low-cost, high latency buckets of write-once unstructured data objects. Depending on the implementation, object stores may be strongly consistent or eventually consistent; as such, the object store abstraction is always exposed as eventually consistent.
 * **Catalogs** are small, strongly consistent key-value stores. These can be used for bookkeeping information needed to detect and correct for object store eventual consistency artifacts, and are also appropriate for other bookkeeping, like the set of tables which exist and their schemas.
 
-The indexing layer consumes this storage model for storing TerrascaleDB's row data and log-structured merge index. Client writes are staged in a write-ahead log stored on a durable block device, and runs of log-structured merge trees are staged to volatile block devices during the checkpointing and merge processes. On checkpoint and merge, these objects are destaged from volatile block storage into object storage. A catalog store per database instance is used to track tables, schemas, durable block file locations such as the write-ahead log, object-store objects such as LSM tree data, and bookkeeping for in-progress merge operations.
+The indexing layer consumes this storage model for storing TerrascaleDB's row data and log-structured merge index. Client writes are staged in a write-ahead log stored on a durable block device, and runs of log-structured merge trees are staged to volatile block devices during the checkpointing and merge processes. These structures are lazily destaged into object-store objects and read back in through a tiered memory / volatile block store cache. One catalog store per database instance is used to track tables, schemas, durable block files of note (e.g. the WAL), object store objects (such as the row store and LSM runs), and information needed to recover the WAL (such as replay start pointer).
 
 In the cloud, durable block devices are cloud block stores such as EBS or managed disks accessed through a local file system. Volatile block devices are locally-attached disk instances, also accessed through the local file system. Object stores wrap cloud object stores like S3 and block blobs. Catalogs wrap cloud-native table storage like DynamoDB or Azure's tables. 
 
@@ -70,7 +70,7 @@ TODO what about encryption? Do we manually encrypt all of our own stuff in-proc,
 
 ## Indexing Structures
 
-TerrascaleDB indexes data using a log-structured merge strategy with elements inspired by Apache Druid and WiscKey.
+TerrascaleDB indexes data using a log-structured merge strategy inspired by ideas from Apache Druid and WiscKey.
 
 Like in WiscKey, new rows are logged to a dedicated log in arrival order, are indexed externally using log-structured merge trees, and are cleaned up using a copy-forward garbage collection scheme. Storing rows out-of-page with respect to the log-structured merge tree index incurs additional read amplification (since rows are not in the tree and must be fetched with an additional read after the tree lookup) but allows for lower write amplification (since the rows themselves do not need to be rewritten with the rest of the tree on checkpoint and merge). This design is particularly well-suited to modern flash memory, which provide good parallel random-read performance but tend to wear out under write-heavy workloads.
 
