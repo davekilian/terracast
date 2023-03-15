@@ -50,28 +50,23 @@ TODO the data types are expected to be scalar, 1D spatial, multidimensional spat
 
 ## Storage Model
 
-TerrascaleDB's cloud native storage model features tiered abstractions over underlying storage, allowing efficient utilization of a variety of cloud-native and local unstructured data storage systems. Although we initially intend TerrascaleDB to run on the cloud and use cloud-native object and block stores, we anticipate a future need to run TerrascaleDB locally, e.g. as a small cluster of nodes inside a ruggedized box. As such, the TerrascaleDB storage model is flexible, abstract and software-defined.
+TerrascaleDB includes a thin storage abstraction layer responsible for interfacing with external storage APIs and network interfaces. This eases the process of moving Terrascale between cloud providers and potentially makes it simpler to light up custom hardware solutions and on-prem scenarios. 
 
----
+The storage layer defines three kinds of storage:
 
-TODO the lowest level abstractions are
+* **Block devices** provide a high-cost, low-latency file system with write-in-place semantics. Some block devices are **durable**, making them appropriate for, e.g. staging customer data. Others are **volatile**, making them appropriate for things like cache spilling, staging writes to external stores, storing runs of intermediate query results, and so on.
+* **Object stores** provide low-cost, high latency buckets of write-once unstructured data objects. Depending on the implementation, object stores may be strongly consistent or eventually consistent; as such, the object store abstraction is always exposed as eventually consistent.
+* **Catalogs** are small, strongly consistent key-value stores. These can be used for bookkeeping information needed to detect and correct for object store eventual consistency artifacts, and are also appropriate for other bookkeeping, like the set of tables which exist and their schemas.
 
-* Durable block storage for write-ahead logging
-* Volatile block storage for staging LSM writes and maybe spilling B+ page cache
-* Object storage for storing LSM trees and big column runs longer term
-* Catalog storage for tracking metadata (tables and schemas, object-storage object versioning)
+The indexing layer consumes this storage model for storing TerrascaleDB's row data and log-structured merge index. Client writes are staged in a write-ahead log stored on a durable block device, and runs of log-structured merge trees are staged to volatile block devices during the checkpointing and merge processes. On checkpoint and merge, these objects are destaged from volatile block storage into object storage. A catalog store per database instance is used to track tables, schemas, durable block file locations such as the write-ahead log, and object-store objects such as LSM tree data.
 
-These have to be abstracted over cloud provider offerings since we intend to be multi-cloud.
+In the cloud, durable block devices are cloud block stores such as EBS or managed disks accessed through a local file system. Volatile block devices are locally-attached disk instances, also accessed through the local file system. Object stores wrap cloud object stores like S3 and block blobs. Catalogs wrap cloud-native table storage like DynamoDB or Azure's tables. 
 
-In the cloud, durable block stores is EBS or page blob (likely accessed through plain file system or direct disk I/O calls), volatile block stores are locally-attached instances or blobcache (again, likely accessed through either file system or direct disk calls). Object stores are S3 or block blob (for S3, we need external bookkeeping to detect/correct eventual-consistency artifacts like disappearing objects). Catalog stores are small structured storage databases like Dynamo or Tables (if the pricing is bad, we may have to consider other options).
+In the future, TerrascaleDB may be extended to run on small clusters of hardware nodes (e.g. an on-the-go ruggedized 'edge' offering). In this setup, durable block devices and object stores might be implemented as a custom replicated protection protocol over physical disks, with n-way replication for durable block storage and Reed-Solomon erasure coding for objects. Volatile block devices might be implemented as non-protected disk storage (no replication or erasure coding). Catalogs might be implemented using a third-party / open-source database running on each node in the cluster.
 
-On our own hardware, durable block stores is file system or direct disk I/O calls with our own internal replication and erasure coding scheme. Volatile block stores is the same, but on fast storage with no replication. Object storage is the same as durable block storage, but the objects are stored in separate files in a file system. Catalog storage is a database running somewhere, can even be as simple as sqlite. Because objects and write-through cache are both just files in a file system, we might want to break abstraction to avoid a separate copy.
+TODO Where do checksums live? Can this layer checksum by itself, or are we relying on the higher level layers to decide where in the file checksums go? It's possible for a GFS-like stream to manage checksums automatically, but we don't have structured append-only storage. And we likely have file system checksumming underneath us too.
 
-Do we need any higher-level abstractions on top of this? Originally, I was considering catalog stores and log stores running on top of a protection layer running on top of raw abstractions; but with cloud-native there's no need for a protection layer, and there is certainly need for a native structured data catalog abstraction so we can reliably track object versions and detect S3 eventual consistency/temporary data loss artifacts. So that means the only higher-level abstraction worth noting is a log, and the only log I have planned in the system is the write-ahead log anyways. There are other things that are 'log-structured' like staging LSM tree data before offloading it to an object store, are just incrementally appending blocks to a file in large chunks. Only the WAL has the problem of needing to buffer writes to avoid RMWs. So I think nix that as an abstraction in this layer and stay laser focused on low level I/O.
-
-What might reopen the can of worms is encryption and checksumming. Where do checksums live? Can this layer checksum by itself, or are we relying on the higher level layers to decide where in the file checksums go? It's possible for a GFS-like stream to manage checksums automatically, but we don't have structured append-only storage. And we likely have file system checksumming underneath us too.
-
-
+TODO what about encryption? Do we manually encrypt all of our own stuff in-proc, or do we rely on a file system filter kind of thing to do full-volume encryption transparently?
 
 ## Indexing Structures
 
