@@ -80,7 +80,7 @@ Dual-indexing enables hybrid transactional/analytical processing, at the cost of
 
 TerrascaleDB's index supports range types for spatial and temporal data, and automatically performs range breakdown for overlapping ranges at indexing time. The columnar index supports efficient lookup of rows which intersect a spatiotemporal bounding box; further refinement for queries involving fine-grained collision detection and spatial joins are implemented at a higher level in the query engine.
 
-TODO segue with we begin by examining the basic data structures that exist in a TerrascaleDB table and then we talk about basic management operations writing ahead, checkpoint and merge. Finally, we discuss query algorithms for scalar-transactional, scalar-analytical and spatiotemporal data.
+This section begins with an overview of the different on-disk structures that store and index data in a single TerrascaleDB table. We then discuss algorithms for building and garbage-collecting these structures, and for offloading into object storage. Finally, we discuss mainline query paths for scalar data and spatiotemporal bounding boxes for transactional and analytical processing workloads.
 
 ### The Row Store
 
@@ -105,9 +105,9 @@ In TerrascaleDB, the column index for a given column is an LSM Tree which maps c
 
 ### Garbage Collection
 
-### Queries and Access Paths
+### Queries on Scalar Data
 
-### Geospatial Indexing
+### Queries on Spatiotemporal Ranges
 
 TODO all we need to say here is that nothing special happens; rows are indexed by primary key, and we don't support geospatial primary keys. The interesting part is what we do with columns, which is to compute bounding boxes and store them as overlapping ranges with one dimension per column, with range breakdown to handle overlaps. This allows us to index by bounding box by finding overlapping ranges in each column, and taking the set intersection of all row sets to get a set of all items which are near the bounding box. The query layer must then do fast-rejects on the 'actual' query bounding boxes and then any detailed join algorithms, which may be accelerated for large sets using spatial structures like kd-trees. 
 
