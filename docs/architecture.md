@@ -98,6 +98,14 @@ I don't know if a B+ tree really helps me with garbage collection here. Maybe a 
 
 We may instead want to further bound the size of a log segment, in bytes or rows or both. For example, 16 bits per row ID within a log segment would get you up to 64K rows, which with 128 bytes or so per row gets you to roughly 8MB log segments. Is that too small? It's certainly cache-friendly insofar as you can fit the whole thing in memory without too much trouble.
 
+Anyways, with this structure, copy-forward garbage collection just adds new log segments to the virtual log and deallocates old segments, and the index is updated to use the new row IDs in the new log segments.
+
+You know, this doesn't really play nice with roaring bitmaps anyways. The index needs virtual LSN numbers which are 64-bit no matter how you look at it. The only way to get the row ID size outside the log down to 32 bits is to segment the index too. I don't know if I really like that.
+
+Maybe I wandered into an open problem here.
+
+
+
 ### Memory Tables
 
 TODO I think what I want to do here is to keep row store pages referenced by the memory table resident in memory, and then have the memory table be the same index in an in-memory multi-version binary search tree that it is on disk. Multiversioning with columnar indexing may be quite hard because there's no longer a single bitmap; there's one per version, or there's one bitmap with versioned bits, neither of which is space-efficient. Maybe we can get away with a row-only memory table and emulate columnar by full memory table scans? Maybe we build a columnar memory table lazily? Maybe we have a traditional column store memory table, but an inverted index style on disk?
