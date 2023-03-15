@@ -78,7 +78,7 @@ TerrascaleDB uses a dual indexing strategy over this arrival-order row store. On
 
 Dual-indexing enables hybrid transactional/analytical processing, at the cost of doubling the write amplification and storage overhead of a traditional row-only or column-only index. Storing (relatively large) row payloads out-of-page in a separate, garbage-collected row store reduces the write amplification and space overhead of dual-indexing, leading to manageable write/space amplification overhead.
 
-TODO column store provides a natural scheme for computing bounding boxes over spatiotemporal data, which can then be further refined with fine-grained collision detection at query time. More detail to follow.
+TerrascaleDB's index supports range types for spatial and temporal data, and automatically performs range breakdown for overlapping ranges at indexing time. The columnar index supports efficient lookup of rows which intersect a spatiotemporal bounding box; further refinement for queries involving fine-grained collision detection and spatial joins are implemented at a higher level in the query engine.
 
 TODO segue with we begin by examining the basic data structures that exist in a TerrascaleDB table and then we talk about basic management operations writing ahead, checkpoint and merge. Finally, we discuss query algorithms for scalar-transactional, scalar-analytical and spatiotemporal data.
 
