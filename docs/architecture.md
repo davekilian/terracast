@@ -90,10 +90,10 @@ This section begins with an overview of the different on-disk structures that st
 
 TODO here's a quick draft:
 
-* The row store is an unordered collection of append-only segments
+* The row store is an unordered collection of append-only segments about 64-256MB in size
 * Segments contain raw row value tuples
 * Segments may be stored as files in durable block storage
-* Segments may be stored as objects in object storage
+* Segments may be stored as objects in object storage (read in through volatile block caching)
 * An active segment is still being built; you can append new rows to one
 * Active segments can only be stored on block storage devices
 * A sealed segment is done; you cannot modify it ever again
@@ -113,7 +113,11 @@ I need to leave to get Max but
 
 We also need to support opaque metadata alongside each individual row, so we can piggypack write-ahead information in this store and use it for recovery when a table partition is loaded.
 
-The last question here is how indexing works within a segment. Obviously a fully processed segment in object storage can just be a log of row IDs followed by a B+ index, followed by a metadata footer that points backwards to the root of the tree and also says where the B+ index is in memory. That allows us to (a) just load the footer to figure out where the tree is, (b) demand load index pages for a segment as needed and (c) page in the full B+ tree index if we ever need to.
+The last question here is how indexing works within a segment. Obviously a fully processed segment in object storage can just be a log of row IDs followed by a B+ index, followed by a metadata footer that points backwards to the root of the tree and also says where the B+ index is in memory. That allows us to (a) just load the footer to figure out where the tree is, (b) demand load index pages for a segment as needed and (c) page in the full B+ tree index if we ever need to. But indexing has to be handled differnet in active segments
+
+* We could just not index these, and rely on them being pretty small
+* We could maintain separate row data and index files and concatenate them when pushing to object; but natively this requires a write-in-place any time a B+ page is updated. For example, the first row is written, we create a root page with just one entry. When the second row is written, we have to overwrite the root page again because it now has two entries. And so on.
+* We can write only complete B+ pages and forward scan the log for the rest. This might not be so bad if we need all these rows in memory for recovery anyways. But do we? I doubt it.
 
 ### Memory Tables
 
