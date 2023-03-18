@@ -74,6 +74,10 @@ TODO what about encryption? Do we manually encrypt all of our own stuff in-proc,
 
 ## Indexing Structures
 
+TODO: reconsider global dual indexing. My original thought here was to have a row table only at the first LSM levels and do MVCC-scans for analytical queries and streaming for incremental queries. That feels like the better design still, in being able to collect many rows of LSM data before you finally split out into new column runs; in fact, with enough amortized runs, you should be able to 'merge' so there's only one global set of columnar data anyways. Is that a better approach? It seems to require less code and probably takes up less space too.
+
+---
+
 TerrascaleDB indexes data using a log-structured merge strategy inspired by ideas from Apache Druid and WiscKey.
 
 Like in WiscKey, new rows are logged to a dedicated 'row store' in arrival order, are indexed externally using log-structured merge trees, and are cleaned up using copy-forward garbage collection. Storing rows out-of-page with respect to the log-structured merge tree index incurs additional read amplification (since rows are not in the tree and must be fetched with an additional read after the tree lookup) but allows for lower write amplification (since the rows themselves do not need to be rewritten with the rest of the tree on checkpoint and merge). This design is a particularly good match for modern flash memory, which generally provides very good latency/throughput on high-queue depth random reads, but is prone to high write latency tails and early wearout for write-heavy workloads.
@@ -113,12 +117,14 @@ I need to leave to get Max but
 
 We also need to support opaque metadata alongside each individual row, so we can piggypack write-ahead information in this store and use it for recovery when a table partition is loaded.
 
-The last question here is how indexing works within a segment. Obviously a fully processed segment in object storage can just be a log of row IDs followed by a B+ index, followed by a metadata footer that points backwards to the root of the tree and also says where the B+ index is in memory. That allows us to (a) just load the footer to figure out where the tree is, (b) demand load index pages for a segment as needed and (c) page in the full B+ tree index if we ever need to. But indexing has to be handled differnet in active segments
+Indexing works as follows
 
-* We could just not index these, and rely on them being pretty small
-* We could maintain separate row data and index files and concatenate them when pushing to object; but natively this requires a write-in-place any time a B+ page is updated. For example, the first row is written, we create a root page with just one entry. When the second row is written, we have to overwrite the root page again because it now has two entries. And so on.
-* We can write only complete B+ pages and forward scan the log for the rest. This might not be so bad if we need all these rows in memory for recovery anyways. But do we? If we're dual-indexing forwards and backwards, I think we do!
-* So maybe the answer here is the segment size is about limited to how much you want to have to reload on recovery, and we cut a new segment in preparation for checkpointing? Then recovery reads a whole segment. The segments in block storage are not indexed. The segments are indexed as part of offloading them to object storage, which is something you'd do during checkpoint anyways.
+* For segments still being built, the index is stored in cache as B+ tree with a build-forward algo
+* An in-progress index is not written out; it's rebuilt on recovery when you replay segments
+* When you checkpoint a segment to disk, you append the B+ tree and a footer with segment metadata
+* In memory, we store a mapping of (low row ID) to (segment number) map managed with RCU
+* That map is used to read back segment root pages in through the cache
+* The segment root pages are used to find more pages through cache as well as segment data itself
 
 ### Memory Tables
 
