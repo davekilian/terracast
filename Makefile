@@ -1,4 +1,5 @@
-CFLAGS=-std=c2x -pedantic -Wall -Wextra -Werror -Wno-comment -g -DDEBUG
+DEBUGFLAGS=-g -DDEBUG
+CFLAGS=-std=c2x -pedantic -Wall -Wextra -Werror -Wno-comment $(DEBUGFLAGS)
 LFLAGS=
 INCLUDES=-I.
 LIBS=
@@ -40,8 +41,7 @@ $(TEST): $(OUT) $(call objects-for,$(TESTDIRS)) Makefile
 	$(CC) $(LFLAGS) $(LIBS) $(call objects-for,$(TESTDIRS)) -o $(TEST)
 -include $(call deps-for,$(TESTDIRS))
 
-dist: CFLAGS := $(filter-out -g, $(CFLAGS))
-dist: CFLAGS := $(filter-out -DDEBUG, $(CFLAGS))
+dist: CFLAGS := $(filter-out $(DEBUGFLAGS), $(CFLAGS))
 dist: CFLAGS += -O3 -flto
 dist: LFLAGS += -O3 -flto
 dist: all

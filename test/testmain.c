@@ -8,6 +8,7 @@
 #include <pch.h>
 #include <test/test.h>
 
+extern test_suite alloc_tests;
 extern test_suite list_tests;
 extern test_suite macro_tests;
 extern test_suite status_tests;
@@ -17,6 +18,7 @@ static const test_suite *test_suites[] =
     &macro_tests,
     &status_tests,
     &list_tests,
+    &alloc_tests,
 };
 
 static const int nsuites = arraysize(test_suites);
