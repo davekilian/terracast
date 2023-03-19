@@ -72,25 +72,7 @@ TODO Where do checksums live? Can this layer checksum by itself, or are we relyi
 
 TODO what about encryption? Do we manually encrypt all of our own stuff in-proc, or do we rely on a file system filter kind of thing to do full-volume encryption transparently? Having this layer transparently encrypt stuff in-proc makes more sense here, you basically need a key store with a KEK or something and then you use your catalog to remember which external secret store key is the one you need for these files. Then you plug in a protected key blob into the block/object layer when opening the block/object store and have the abstraction layer transparently encrypt/decrypt on the fly. Ideally this can be done at the abstraction layer, so that the individual store implementations don't have to manage encryption/decryption logic themselves. Also, it'd be nice to include a new checksum on encrypted data post-encryption, which is another good argument for checksumming at this store layer. But we already talked about why that's not such a great idea. Also, it's worth noting the encrypted blob may have extra metadata too, like a unique pseudorandom IV per block so we're not doing plain virtual code book or whatever it's called.
 
-## Indexing Structures
-
-TODO: reconsider global dual indexing. My original thought here was to have a row table only at the first LSM levels and do MVCC-scans for analytical queries and streaming for incremental queries. That feels like the better design still, in being able to collect many rows of LSM data before you finally split out into new column runs; in fact, with enough amortized runs, you should be able to 'merge' so there's only one global set of columnar data anyways. Is that a better approach? It seems to require less code and probably takes up less space too.
-
----
-
-TerrascaleDB indexes data using a log-structured merge strategy inspired by ideas from Apache Druid and WiscKey.
-
-Like in WiscKey, new rows are logged to a dedicated 'row store' in arrival order, are indexed externally using log-structured merge trees, and are cleaned up using copy-forward garbage collection. Storing rows out-of-page with respect to the log-structured merge tree index incurs additional read amplification (since rows are not in the tree and must be fetched with an additional read after the tree lookup) but allows for lower write amplification (since the rows themselves do not need to be rewritten with the rest of the tree on checkpoint and merge). This design is a particularly good match for modern flash memory, which generally provides very good latency/throughput on high-queue depth random reads, but is prone to high write latency tails and early wearout for write-heavy workloads.
-
-TerrascaleDB uses a dual indexing strategy over this arrival-order row store. One of the indexes is a traditional row-oriented log-structured merge tree which maps primary keys to the corresponding location in the row store. The other index is a columnar inverted index inspired by Apache Druid. The row index is well-suited for answering OLTP queries that request individual rows or small ranges, and the columnar index is well-suited for OLAP (cross-tabulation) queries that feature large-scale aggregation and grouping with potentially complex multidimensional filters and large joins over many tables.
-
-Dual-indexing enables hybrid transactional/analytical processing, at the cost of roughly doubling the write- and storage-amplification overhead compared to a row-only or column-only index. Storing (relatively large) row payloads out-of-page in a separate, garbage-collected row store as suggested by WiscKey reduces the write- and space-amplification overhead of dual-indexing to what we believe is a manageable level.
-
-TerrascaleDB's indexing layer supports range types, and automatically breaks down overlapping ranges in the index transparently, on-the-fly. The columnar index supports efficient lookup of objects which intersect an n-dimensional bounding box specified by one range along each axis. N-dimensional bounding box queries are used by the query layer to generate candidate result sets, which are further refined using fine-grained collision detection algorithms for spatial queries and spatial joins.
-
-This section begins with an overview of the different on-disk structures that store and index data in a single TerrascaleDB table. We then discuss algorithms for building and garbage-collecting these structures, and for offloading into object storage. Finally, we discuss mainline query paths for scalar data and spatiotemporal bounding boxes for transactional and analytical processing workloads.
-
-### The Row Store
+### Row Stores
 
 TODO here's a quick draft:
 
@@ -125,6 +107,36 @@ Indexing works as follows
 * In memory, we store a mapping of (low row ID) to (segment number) map managed with RCU
 * That map is used to read back segment root pages in through the cache
 * The segment root pages are used to find more pages through cache as well as segment data itself
+
+## Indexing Structures
+
+TODO: at some point while I was drafting this, I decided to go with a full dual-indexing route instead of the original plan, which was to use traditional LSM up until we have a checkpoint or two of data worth merging, at which point the amount of data we're handling becomes large enough that it's worth dual-indexing into row and columnar storage. I don't remember how I got off that track and I want to get back on that track.
+
+So basically what I want here is
+
+* There's a row store as we described above (I've moved that content out of this section)
+* The primary index is an LSM-tree of (primary key) to (row ID in row store)
+* We log directly to the row store for short-term recovery
+* We also lazily build an index-only journal with (primary key to row id) mapping, possibly in whatever order is simplest for the transaction isolation (concurrency control) system
+* In memory, we have a primary key to row ID BST with multiversioning support
+* For any secondary indexes, we also keep a secondary key to row ID BST with multiversioning
+* We checkpoint each primary- and secondary-index to LSM checkpoint B+ trees on disk
+* Transactional and analytical queries all 
+* 
+
+---
+
+TerrascaleDB indexes data using a log-structured merge strategy inspired by ideas from Apache Druid and WiscKey.
+
+Like in WiscKey, new rows are logged to a dedicated 'row store' in arrival order, are indexed externally using log-structured merge trees, and are cleaned up using copy-forward garbage collection. Storing rows out-of-page with respect to the log-structured merge tree index incurs additional read amplification (since rows are not in the tree and must be fetched with an additional read after the tree lookup) but allows for lower write amplification (since the rows themselves do not need to be rewritten with the rest of the tree on checkpoint and merge). This design is a particularly good match for modern flash memory, which generally provides very good latency/throughput on high-queue depth random reads, but is prone to high write latency tails and early wearout for write-heavy workloads.
+
+TerrascaleDB uses a dual indexing strategy over this arrival-order row store. One of the indexes is a traditional row-oriented log-structured merge tree which maps primary keys to the corresponding location in the row store. The other index is a columnar inverted index inspired by Apache Druid. The row index is well-suited for answering OLTP queries that request individual rows or small ranges, and the columnar index is well-suited for OLAP (cross-tabulation) queries that feature large-scale aggregation and grouping with potentially complex multidimensional filters and large joins over many tables.
+
+Dual-indexing enables hybrid transactional/analytical processing, at the cost of roughly doubling the write- and storage-amplification overhead compared to a row-only or column-only index. Storing (relatively large) row payloads out-of-page in a separate, garbage-collected row store as suggested by WiscKey reduces the write- and space-amplification overhead of dual-indexing to what we believe is a manageable level.
+
+TerrascaleDB's indexing layer supports range types, and automatically breaks down overlapping ranges in the index transparently, on-the-fly. The columnar index supports efficient lookup of objects which intersect an n-dimensional bounding box specified by one range along each axis. N-dimensional bounding box queries are used by the query layer to generate candidate result sets, which are further refined using fine-grained collision detection algorithms for spatial queries and spatial joins.
+
+This section begins with an overview of the different on-disk structures that store and index data in a single TerrascaleDB table. We then discuss algorithms for building and garbage-collecting these structures, and for offloading into object storage. Finally, we discuss mainline query paths for scalar data and spatiotemporal bounding boxes for transactional and analytical processing workloads.
 
 ### Memory Tables
 
