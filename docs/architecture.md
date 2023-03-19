@@ -72,41 +72,67 @@ TODO Where do checksums live? Can this layer checksum by itself, or are we relyi
 
 TODO what about encryption? Do we manually encrypt all of our own stuff in-proc, or do we rely on a file system filter kind of thing to do full-volume encryption transparently? Having this layer transparently encrypt stuff in-proc makes more sense here, you basically need a key store with a KEK or something and then you use your catalog to remember which external secret store key is the one you need for these files. Then you plug in a protected key blob into the block/object layer when opening the block/object store and have the abstraction layer transparently encrypt/decrypt on the fly. Ideally this can be done at the abstraction layer, so that the individual store implementations don't have to manage encryption/decryption logic themselves. Also, it'd be nice to include a new checksum on encrypted data post-encryption, which is another good argument for checksumming at this store layer. But we already talked about why that's not such a great idea. Also, it's worth noting the encrypted blob may have extra metadata too, like a unique pseudorandom IV per block so we're not doing plain virtual code book or whatever it's called.
 
-### Row Stores
+## Row Stores
 
-TODO here's a quick draft:
+TerrascaleDB takes a nod from WiscKey by storing rows and indexes separately on disk. Rows do not appear in the primary index tree; instead, rows are stored in a separate row store. The primary index and any secondary indexes point to rows in this store. After a query identifies result rows using a primary or secondary index, it issues additional reads to fetch the rows themselves from the row store. The row store is not modified when an index is checkpointed or merged; instead, row deletions and overwrites are handled with an independent copy-forward garbage collection scheme.
 
-* The row store is an unordered collection of append-only segments about 64-256MB in size
-* Segments contain raw row value tuples
-* Segments may be stored as files in durable block storage
-* Segments may be stored as objects in object storage (read in through volatile block caching)
-* An active segment is still being built; you can append new rows to one
-* Active segments can only be stored on block storage devices
-* A sealed segment is done; you cannot modify it ever again
-* Sealed segments initially exist in block storage, but are later offloaded to object storage
-* Segment metadata is tracked in the database's catalog
-* Catalog metadata includes allocated segment IDs, seal state, and URI to underlying files
-* Entries in the log are indexed by a 64-bit row identifiers (rowids)
-* Rowids are globally unique in the context of a single database table
-* A 64-bit rowid is split into a 32-bit table-global segment ID and a 32-bit segment-local entry ID
-* The catalog tracks which 32-bit table-global segment IDs are allocated
+As noted in the literature for WiscKey, this scheme lowers write amplification, since rows do not need to be rewritten on checkpoint or merge, but does so at the expensive on increased read amplification, since rows are no longer found inside the LSM tree itself. In fact, a large number of reads may be issued after an index lookup if index-adjacent rows are not adjacent in the row store, even for the primary index. This tradeoff is a good fit for flash memory, which performs poorly and wears quickly on write-heavy workloads, but handles highly parallel random reads well. Separating rows from index is also key to managing write- and space-amplification in Terrascale's dual-indexing strategy.
 
-I need to leave to get Max but
+In this section, we discuss the row store, which is tuned for storing raw row values and admits a copy-forward garbage collection strategy. In the following section, we discuss the structure of Terrascale's dual-indexing strategy, in which both row and columnar indexes reference rows in this store.
 
-* With the high bits not having an order-related meaning, we're now free to have multiple active segs
-* That in turn makes it very feasible to have active GC segs in parallel with active write-ahead segs
-* If we wish, we can demote the segid to 16 bits if it helps make the bitmaps smaller
+### Basic Structure
 
-We also need to support opaque metadata alongside each individual row, so we can piggypack write-ahead information in this store and use it for recovery when a table partition is loaded.
+The row store is an unordered collection of append-only **segments**, which contain full rows that have been written to the database. Segments are row-oriented storage; each row appears as a tuple of values stored adjacently within the segment.  Each segment is an independent unit of storage with its own local address space. Any number of segments can be written to simultaneously, and any segments can be deleted without impacting other segments. 
 
-Indexing works as follows
+A segment can be **active** or **sealed**. New rows are allowed to be appended to the end of an active segment; sealed segments are immutable. Active segments are local to the node which created them, and are stored in node-specific durable block storage. When the segment reaches a size limit or otherwise needs to be shared with other nodes, it is sealed and then offloaded to object storage. From there, any node can read in the immutable segment from object storage, possibly caching it in memory and/or local volatile block storage. 
 
-* For segments still being built, the index is stored in cache as B+ tree with a build-forward algo
-* An in-progress index is not written out; it's rebuilt on recovery when you replay segments
-* When you checkpoint a segment to disk, you append the B+ tree and a footer with segment metadata
-* In memory, we store a mapping of (low row ID) to (segment number) map managed with RCU
-* That map is used to read back segment root pages in through the cache
-* The segment root pages are used to find more pages through cache as well as segment data itself
+The target size limit for a segment &mdash; that is, the size at which a segment is sealed and offloaded to object storage &mdash; should be somewhere in the range of 256MB-2GB. Segments need to be large enough that the system does not need to manage an excessively large number of segments, but should also be small enough to admit short garbage collection passes.
+
+Active segments are initially staged in durable block storage (see Storage Model above). When a segment is sealed, it is lazily offloaded to object storage, and may be read back in through a volatile block storage cache. The database catalog is used to track all segments, active or sealed, which currently exist, as well as their current locations in durable block or object storage.
+
+### Row Identifiers
+
+Each row stored in a row store has a 64-bit **row identifier** or **rowid** which is globally unique for a single TerrascaleDB database. The mapping from rowid to row value tuple is immutable once established; if a row is updated, it is rewritten as a new row with a new rowid, and the old rowid is later garbage-collected. Similarly, when the garbage collection process copies a row forward, it allocates a new copy of the same row with a new rowid, and repoints any index references to the old rowid to the new rowid.
+
+A 64-bit rowid is partitioned into two 32-bit sub-identifiers. The 32 high bits of a rowid are the **segment identifier** or **segid**, which identify a single segment in the row store. All rows in a single segment share the same segid, and thus the segid is not stored directly in the segment store at all. The 32 low bits of a rowid are the **segment-local row identifier** or **localid**. These localids are allocated in monotonically increasing order as rows are appended to the segment.
+
+TODO catalog to track which segment IDs are in use. Come up with a good scheme for efficiently tracking avilable segment numbers.
+
+
+
+---
+
+TODO before we move on past here, one big question here is whether we can say a segment is always active while it's being used to write ahead. Because that significantly controls the state space for a segment: an active segment is appendable and is stored in durable block storage locally to a single node, without an index, and can only be reopened by reading in the whole thing and rebuilding the B+ tree index in memory. Then a sealed segment is immutable, globally visible, has an index, can be read through a cache in pages, and is eligible for garbage collection. Oh, and we can clean any opaque data and/or empty space (due to early flush) out of the segment when we do the transition.
+
+---
+
+
+
+
+
+### Write-Ahead
+
+TODO this needs to talk about the scheme by which we try to write entire flash pages of data but may need to flush early if a configurable timeout elapses, in which case we will still write a single page but waste some space. This space will show up in the occupancy map and will go away during garbage collection.
+
+We also support opaque data insertion within the segment. Each row can have associated opaque data, such as the transaction replay information needed by the write-ahead engine, and we also support fully opaque records, which can be used to mark deletions. Opaque data also shows up as non-occupant space that makes the segment eligible for garbage collection once sealed.
+
+### Sealing and Offloading Segments
+
+TODO in more detail, explain how a segment is sealed (is it just at the logical level in the catalog? I think that's ok) and how it's offloaded (I think you can just copy the full segment into object storage, then append the in memory index, then finally append a footer with segment-level metadata)
+
+
+
+### Segment Indexes
+
+TODO the basic scheme here is that we keep an in-memory b+ index of (row id) to (offset in segment) for each active segment we are currently building. This is not stored on disk; instead, it is reconstructed the next time the segment is read in. Note that half-completed garbage collection segments are simply discarded, they are never read back in, so really this is only a scenario for write-ahead, at least today.
+
+TODO once you checkpoint the thing, you stage 
+
+### Tracking Segments
+
+TODO what we store in the catalog
+
+TODO In memory, we store a mapping of (low row ID) to (segment number) map managed with RCU. That map is used to read back segment root pages in through the cache, which is in turn used to find more pages to read in through the cache, and so on.
 
 ## Indexing Structures
 
