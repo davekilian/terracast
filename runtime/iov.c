@@ -106,26 +106,28 @@ triovpos tr_iov_advance(
         const triovpos *pos,
         unsigned bytes)
 {
-    triovpos next = *pos;
+    triovpos newpos = *pos;
 
-    while (bytes > 0 && next.index < iov->count) {
+    while (bytes > 0 && newpos.index < iov->count) {
 
-        const struct iovec *item = iov->iov + next.index;
+        const struct iovec *item = iov->iov + newpos.index;
 
-        tr_assert(next.offset <= item->iov_len);
+        tr_assert(newpos.offset <= item->iov_len);
         unsigned rest = item->iov_len - pos->offset;
 
-        if (rest < bytes) {
-            next.offset += bytes;
-            next.voffset += bytes;
+        if (bytes < rest) {
+            newpos.offset += bytes;
+            newpos.voffset += bytes;
+            bytes = 0;
         } else {
-            next.index += 1;
-            next.offset = 0;
-            next.voffset += rest;
+            newpos.index += 1;
+            newpos.offset = 0;
+            newpos.voffset += rest;
+            bytes -= rest;
         }
     }
 
-    return next;
+    return newpos;
 }
 
 triovpos tr_iov_rewind(
@@ -136,13 +138,35 @@ triovpos tr_iov_rewind(
 unsigned tr_iov_measure_slice(
         const triov *base,
         unsigned offset,
-        unsigned size);
+        unsigned size)
+{
+    triovpos start = tr_iov_at(base, offset);
+    triovpos end = tr_iov_advance(base, &start, size);
+    return (end.index - start.index) + 1;
+}
 
 void tr_iov_slice(
         const triov *base,
         triov *slice,
         unsigned offset,
-        unsigned size);
+        unsigned size)
+{
+    triovpos start = tr_iov_at(base, offset);
+    triovpos end = tr_iov_advance(base, &start, size);
+
+    unsigned length = (end.index - start.index) + 1;
+    tr_assert(slice->capacity >= length);
+
+    slice->count = length;
+    memcpy(slice->iov, base->iov + start.index, sizeof(struct iovec) * length);
+
+    slice->iov[0].iov_base = ptr_add(slice->iov[0].iov_base, start.offset);
+    slice->iov[0].iov_len = slice->iov[0].iov_len - start.offset;
+
+    if (end.index < base->count) {
+        slice->iov[length - 1].iov_len = end.offset;
+    }
+}
 
 trstatus tr_iov_alloc_slice(
         const triov *base,
