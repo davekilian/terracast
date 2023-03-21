@@ -133,7 +133,11 @@ triovpos tr_iov_advance(
 triovpos tr_iov_rewind(
         const triov *iov,
         const triovpos *pos,
-        unsigned bytes);
+        unsigned bytes)
+{
+    (void)iov; (void)pos; (void)bytes;
+    return *pos; // TODO NYI
+}
 
 unsigned tr_iov_measure_slice(
         const triov *base,
