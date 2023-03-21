@@ -144,6 +144,8 @@ unsigned tr_iov_measure_slice(
 
     triovpos start = tr_iov_at(base, offset);
     triovpos end = tr_iov_advance(base, &start, size - 1);
+    tr_assert(end.index < base->count && "slice size out of range");
+
     return (end.index - start.index) + 1;
 }
 
@@ -158,6 +160,7 @@ void tr_iov_slice(
     // Find the start and end positions within the base list
     triovpos start = tr_iov_at(base, offset);
     triovpos end = tr_iov_advance(base, &start, size - 1);
+    tr_assert(end.index < base->count && "slice size out of range");
 
     // Figure out how many bufers are referenced in this slice
     unsigned length = (end.index - start.index) + 1;
