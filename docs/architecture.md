@@ -64,9 +64,17 @@ The indexing layer consumes this storage model for storing TerrascaleDB's row da
 
 In the cloud, durable block devices are cloud block stores such as EBS or managed disks accessed through a local file system. Volatile block devices are locally-attached disk instances, also accessed through the local file system. Object stores wrap cloud object stores like S3 and block blobs. Catalogs wrap cloud-native table storage like DynamoDB or Azure's tables. 
 
-In the future, TerrascaleDB may be extended to run on small clusters of hardware nodes (e.g. an on-the-go ruggedized 'edge' offering). In this setup, durable block devices and object stores might be implemented as a custom replicated protection protocol over physical disks, with n-way replication for durable block storage and Reed-Solomon erasure coding for objects. Volatile block devices might be implemented as non-protected disk storage (no replication or erasure coding). Catalogs might be implemented using a third-party / open-source database running on each node in the cluster.
+In the future, TerrascaleDB may be extended to run on small clusters of hardware nodes (e.g. an on-the-go ruggedized 'edge' offering). In this setup, durable block devices and object stores might be implemented as a custom replicated protection protocol over physical disks, with n-way replication for durable block storage and Reed-Solomon erasure coding for objects. Volatile block devices might be implemented as non-protected disk storage (no replication or erasure coding). Catalogs might be implemented using a third-party / open-source database running on each node in the cluster, or as decrees passed by a Raft/Paxos cluster.
 
-TODO a global URI scheme so e.g. a catalog can point to data across different storage subsystems. Example: a row store segment may exist in durable block storage or an object store; the catalog uses a URI to identify which kind of store the segment is currently in and where it is within that store.
+Individual block stores, objects in object stores, and catalog tables are identified using URIs. Terrascale defines a set of custom URI scheme to identify TerrascaleDB data artifacts stored in different kinds of systems
+
+* `trfs` URIs identify block storage stored as files in a locally accessible file system
+* `trfso` URIs identify object store objects stored as files in a locally accessible file system
+* `trkv` URIs identify catalogs stored using a simple textual key-value format in a file on the local file system
+* `trec2` URIs identify AWS EC2 block devices
+* `trpgblob` URIs identify Azure page blob block devices
+* `trs3` URIs identify AWS S3 objects
+* `trblob` URIs identify Azure block blob objects
 
 TODO Where do checksums live? Can this layer checksum by itself, or are we relying on the higher level layers to decide where in the file checksums go? It's possible for a GFS-like stream to manage checksums automatically, but we don't have structured append-only storage. And we likely have file system checksumming underneath us too, but we want to checksum as early as possible and pass checksums down the stack as far as we can. I think there are relatively reasonable checksumming strategies for the indexing layer, like per log flush buffer and per-b-tree page, so it's not a disaster if we push checksumming up a level. But if we can make it transparent at this layer, that's nice. One of the problems with transparent checksumming is this layer doesn't know the read block size of the parent.
 
