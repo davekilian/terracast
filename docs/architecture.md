@@ -204,6 +204,12 @@ TODO Anything you can do on unsorted columnar data, you can also do on an invert
 
 More concrete examples: min just gets the lowest matching column value that has nonzero bits, count distinct and sum just look at number of instances of each column value, and mean is just sum divided by count. Some functions like ranks and percentiles need larger scans and may require more work, and/or approximation algorithms if we can find them (think like the quick select median of medians).
 
+## Partitioning
+
+TODO these are all tricky because they're all LSM trees; if we had plain columns then it'd be simple to just limit the size of a single column file and then shuffle the column files around. However, we have an inverted index so we need to do something about that. Most likely a scheme that makes sense is range partitioning with size-based targets for triggering a split or neighbor merge; this can be used on row and column stores at any level. 
+
+I wonder if it'd make sense to use a hash partitioning strategy early on, accepting that range queries (scalar, range, spatial-temporal) just have to scan all rows of a hash-partioned memory table and all unmerged checkpoints ... at least the sizes of those datasets are relatively small, and it'd make it very simple to handle ingestion at arbitrarily high throughput with arbitrarily many frontend nodes. Every checkpoint gets shuffled into many backend column table partitions anyways, so maybe it doesn't hurt much to also shuffle into row partitions too without any kind of row affinity.
+
 ## Transactions and Concurrency Control
 
 TODO this is an LSN-ordered publish log for write-only (WO) transactions, snapshot isolation for read-only (RO) transactions at any scale (point, window, analytical), and a predicate locking scheme for read-write (RW) transactions for the complex update scenario. WO transactions are written to one of the active write-ahead logs with a single record that describes and commits the transactions, whereas RW transactions commit incrementally, with the final commit piggybacked on the last incremental write. Recovery replays committed transactions and ignores uncommited ones; since this is an LSM, there is only a log, so there is nothing to undo.
