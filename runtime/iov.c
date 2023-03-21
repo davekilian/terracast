@@ -51,7 +51,7 @@ trstatus tr_iov_alloc(
 
 trstatus tr_iov_stackalloc(
         unsigned nbuffers,
-        struct _trstack *stack,
+        trstack *stack,
         triov **result)
 {
     triov *iov = tr_stack_alloc(stack, tr_iov_measure(nbuffers));
@@ -158,6 +158,8 @@ void tr_iov_slice(
     tr_assert(size > 0);
 
     // Find the start and end positions within the base list
+    // Note that the end position here is the last sliced byte *inclusively*
+    //
     triovpos start = tr_iov_at(base, offset);
     triovpos end = tr_iov_advance(base, &start, size - 1);
     tr_assert(end.index < base->count && "slice size out of range");
@@ -181,14 +183,40 @@ void tr_iov_slice(
 
 trstatus tr_iov_alloc_slice(
         const triov *base,
-        triov *slice,
+        triov **result,
         unsigned offset,
         unsigned size,
-        tralloctag tag);
+        tralloctag tag)
+{
+    unsigned bytes = tr_iov_measure_slice(base, offset, size);
+
+    triov *slice = tr_alloc(bytes, tag);
+    if (slice == NULL) {
+        return trstatus_no_mem;
+    }
+
+    tr_iov_slice(base, slice, offset, size);
+    *result = slice;
+
+    return trstatus_ok;
+}
 
 trstatus tr_iov_stackalloc_slice(
         const triov *base,
-        triov *slice,
+        triov **result,
         unsigned offset,
         unsigned size,
-        struct _trstack *stack);
+        trstack *stack)
+{
+    unsigned bytes = tr_iov_measure_slice(base, offset, size);
+
+    triov *slice = tr_stack_alloc(stack, bytes);
+    if (slice == NULL) {
+        return trstatus_no_mem;
+    }
+
+    tr_iov_slice(base, slice, offset, size);
+    *result = slice;
+
+    return trstatus_ok;
+}

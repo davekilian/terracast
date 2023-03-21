@@ -50,14 +50,14 @@ void tr_iov_slice(
 
 trstatus tr_iov_alloc_slice(
         const triov *base,
-        triov *slice,
+        triov **slice,
         unsigned offset,
         unsigned size,
         tralloctag tag);
 
 trstatus tr_iov_stackalloc_slice(
         const triov *base,
-        triov *slice,
+        triov **slice,
         unsigned offset,
         unsigned size,
         struct _trstack *stack);
