@@ -11,6 +11,7 @@
 extern test_suite alloc_tests;
 extern test_suite list_tests;
 extern test_suite macro_tests;
+extern test_suite stack_tests;
 extern test_suite status_tests;
 
 static const test_suite *test_suites[] =
@@ -19,6 +20,7 @@ static const test_suite *test_suites[] =
     &status_tests,
     &list_tests,
     &alloc_tests,
+    &stack_tests,
 };
 
 static const int nsuites = arraysize(test_suites);

@@ -17,6 +17,7 @@
 
 #include <pthread.h>
 
+#include <runtime/alloc.h>
 #include <runtime/debug.h>
 #include <runtime/macros.h>
 #include <runtime/status.h>
