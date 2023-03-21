@@ -5,6 +5,8 @@
 //
 // iov.h - utilities for managing scatter-gather lists
 //
+// TODO overview/justification, alloc path, positions, slices
+//
 //////////////////////////////////////////////////////////////////////////////
 
 #pragma once
@@ -23,7 +25,7 @@ triov tr_iov_single(void *buffer, unsigned bufbytes);
 
 unsigned tr_iov_measure(unsigned nbuffers);
 
-void tr_iov_init(unsigned nbuffers, triov *iov);
+void tr_iov_initialize(triov *iov, unsigned nbuffers);
 
 trstatus tr_iov_alloc(
         unsigned nbuffers,

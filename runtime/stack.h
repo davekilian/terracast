@@ -55,7 +55,7 @@ typedef struct _trstackseg {
 static_assert(sizeof(trstackseg) % 16 == 0);
 
 // A reusable push-allocator suitable for use with async tasks
-typedef struct {
+typedef struct _trstack {
 
     trstackseg *segments;   // Storage segments, newest to oldest
     void *stackptr;         // Where to make the next allocation
