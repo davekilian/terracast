@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include <pthread.h>
+#include <sys/uio.h>
 
 #include <runtime/alloc.h>
 #include <runtime/debug.h>
