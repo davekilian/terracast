@@ -110,7 +110,7 @@ A second database-global catalog table is used to track contiguous ranges of ava
 
 Active and sealed segments support different access patterns tailored for different use cases:
 
-Active segments are intended for write-ahead and recovery scenarios. These segments are writable, but private to a single node, and are stored in block storage devices owned by that node. Writers can insert additional global and row-local "opaque" data that is not parsed by the row store layer itself, which is useful for storing bookkeeping information about transactions for write-ahead log recovery. An index which maps (row localid) to (byte offset of row within segment) is maintained in memory for active segments, but not on disk. Because there is no persistent index for an active segment, the only way to load an active segment is to read the entire thing from start to finish. This is usually required during write-ahead log recovery anyways.
+Active segments are intended for write-ahead and recovery scenarios. These segments are writable, but private to a single node, and are stored in block storage devices owned by that node. Writers can insert additional global and row-local "opaque" data that is not parsed by the row store layer itself, which is useful for storing bookkeeping information about transactions for write-ahead log recovery. An index which maps (row localid) to (byte offset of row within segment) is maintained in memory for active segments, but not on disk (doing so would cause fragmentation and frequent read-modify-write cycles on flash storage). Because there is no persistent index for an active segment, the only way to load an active segment is to read the entire thing from start to finish. This is usually required during write-ahead log recovery anyways.
 
 Sealed segments are intended for long term storage and large-scale parallel queries. These segments are immutable, publicly visible to all nodes in a TerrascaleDB cluster, and are stored in global object storage. A persistent index from (row id) to (byte offset of row within segment) is persisted to the end of the segment when it is offloaded to object storage, allowing ranges of sealed segments to be demand-paged without reading the full segment end-to-end. All opaque data that was inserted into the segment when it was active is cleaned during the process of offloading the segment to object storage. The garbage collector only considers sealed segments when choosing candidate segments to garbage-collect.
 
@@ -126,49 +126,31 @@ The following table summarizes the capabilities and attributes of the two differ
 | Indexed            | In memory                  | On disk                              |
 | Garbage collection | Never a candidate          | Always a candidate                   |
 
+### Indexing
 
+As previously mentioned, each row store segment, active or sealed, has an associated B+ tree index which maps each row's localid to its corresponding byte offset within the store. The indexing layer's memory table, row table and columnar tables all refer to rows by their global rowids. The B+ tree index inside the row store completes the mapping from rowid to physical location where the full row is stored.
 
+For active segments, the segment index is maintained in memory. This is considered acceptable because the size of an active segment is limited, in practice, by the amount of time we're willing for a table partition to 'go offline' while the recovery process is reading rows back from disk; the segment index is an order of magnitude smaller, such that it easily fits into memory. A 1GB segment consisting of 128-byte rows has about 8 million rows; if each is indexed as a single 32-bit offset, the size of the index need only be roughly 32MB. Maintaining the index only in memory works because active segments are always reloaded in their entirety as part of recovery anyways.
 
+For sealed segments, which may be demand-paged and should not be memory-resident, the index is stored directly in the segment file in object storage, immediately following the region of the segment which contains rows. Each sealed segment object file ends with a fix-sized footer which points backwards to the row array and the root page of the segment index; when a segment is requested, the cache manager reads the footer (if not already cached) to find the root index page, reads the root index page (if not already cached) to find relevant director and leaf pages, and so on.
 
+Each leaf page consists of a page header, which includes (among other things) the localid of the first row referenced by this index page, and the number of rows indexed by the reference page. The rest the page consists of an array of 32-bit file offsets, where the first 32-bit value is the file offset of the row with localid (pagehdr->localid), the second is for the row with localid (pagehdr->localid + 1) and so on. The use of compact, fixed-size offsets allows the page to be binary-searched for a given localid.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-### Segment Indexes
-
-TODO the basic scheme here is that we keep an in-memory b+ index of (row id) to (offset in segment) for each active segment we are currently building. This is not stored on disk; instead, it is reconstructed the next time the segment is read in. Note that half-completed garbage collection segments are simply discarded, they are never read back in, so really this is only a scenario for write-ahead, at least today.
-
-TODO once you checkpoint the thing, you stage 
-
-
-
-
-
-
-
-
+In memory, internal pages store arrays of (localid) to (cache handle identifier) for child pages; on disk, internal pages are arrays of (localid) to (32-bit file offset of child page) instead.
 
 ### Write-Ahead
 
-TODO this needs to talk about the scheme by which we try to write entire flash pages of data but may need to flush early if a configurable timeout elapses, in which case we will still write a single page but waste some space. This space will show up in the occupancy map and will go away during garbage collection.
+TerrascaleDB uses row stores for table-level write-ahead logging. When a row is inserted or updated, the full row value is appended to an active segment in the row store; when a row is deleted, a tombstone record is appended as opaque data instead. Each record includes opaque data which specifies transaction metadata and ordering information, which is used during recovery to rebuild all in-memory index state, undoing and redoing transactions as needed. Checkpoint state for batch inserts or updates, as well as more complex multi-row transaction checkpoint states, are also appended as opaque data.
 
-We also support opaque data insertion within the segment. Each row can have associated opaque data, such as the transaction replay information needed by the write-ahead engine, and we also support fully opaque records, which can be used to mark deletions. Opaque data also shows up as non-occupant space that makes the segment eligible for garbage collection once sealed.
+The row store is responsible for buffering pages in memory and holding transactions until those pages are flushed durably to durable block storage. If an append to an active segment arrives while there is no active buffer, a new buffer is allocated, and a timer is started; when the buffer is filled or the timer elapses, the full page is flushed to durable storage, whether or not it is full. All transactions which were waiting for the flush are then released. Always flushing full pages at a time improves flash write latency (at the tail) and wear, as doing so eliminates the need for the FTL to perform internal read-modify-write cycles at the page level. Unfortunately, since these devices do not publish page sizes to the operating system, the size of a flush buffer must be configured manually.
+
+Opaque data written to an active segment, as well as unused buffer space resulting from buffers that were flushed before they were completely full due to the flush timer, are all cleaned from the segment during the seal-and-off-load process, which is described next.
 
 ### Sealing and Offloading Segments
 
-TODO in more detail, explain how a segment is sealed (is it just at the logical level in the catalog? I think that's ok) and how it's offloaded (I think you can just copy the full segment into object storage, then append the in memory index, then finally append a footer with segment-level metadata)
+TODO this is usually the first step of checkpointing. In a single catalog transaction, this segment is sealed and a new active segment is allocated in its place to accept further writes
 
-
+TODO we flush the segment from memory, and then scan it back in from disk as if we were trying to load it. Each row is written out to a new segment file in volatile block storage; we skip any opaque records, opaque data, and unused buffer space as part of this process. As we write, we also build an in-memory index from (row localid) to (byte offset within new segment file) in memory as a B+ tree written left-to-right. At the end, we flush the B+ tree index, followed by a fixed-size footer with metadata and backpointers to the rows and the root B+ index page.
 
 ## Indexing Structures
 
