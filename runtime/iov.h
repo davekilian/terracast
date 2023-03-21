@@ -62,7 +62,15 @@ trstatus tr_iov_stackalloc_slice(
         unsigned size,
         struct _trstack *stack);
 
-// TODO primitives to read/write a scatter-gather list from a flat buffer
+trstatus tr_iov_read(
+        const triov *iov,
+        void *buffer,
+        unsigned bufsize);
+
+trstatus tr_iov_write(
+        void *buffer,
+        unsigned bufsize,
+        const triov *iov);
 
 typedef struct {
 
