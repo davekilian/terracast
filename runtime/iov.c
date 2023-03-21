@@ -140,8 +140,10 @@ unsigned tr_iov_measure_slice(
         unsigned offset,
         unsigned size)
 {
+    tr_assert(size > 0);
+
     triovpos start = tr_iov_at(base, offset);
-    triovpos end = tr_iov_advance(base, &start, size);
+    triovpos end = tr_iov_advance(base, &start, size - 1);
     return (end.index - start.index) + 1;
 }
 
@@ -151,21 +153,27 @@ void tr_iov_slice(
         unsigned offset,
         unsigned size)
 {
-    triovpos start = tr_iov_at(base, offset);
-    triovpos end = tr_iov_advance(base, &start, size);
+    tr_assert(size > 0);
 
+    // Find the start and end positions within the base list
+    triovpos start = tr_iov_at(base, offset);
+    triovpos end = tr_iov_advance(base, &start, size - 1);
+
+    // Figure out how many bufers are referenced in this slice
     unsigned length = (end.index - start.index) + 1;
     tr_assert(slice->capacity >= length);
 
+    // Copy the original buffers into the slice
     slice->count = length;
     memcpy(slice->iov, base->iov + start.index, sizeof(struct iovec) * length);
 
+    // Trim the start of the first buffer
     slice->iov[0].iov_base = ptr_add(slice->iov[0].iov_base, start.offset);
     slice->iov[0].iov_len = slice->iov[0].iov_len - start.offset;
 
-    if (end.index < base->count) {
-        slice->iov[length - 1].iov_len = end.offset;
-    }
+    // Trim the end of the last buffer
+    tr_assert(end.index < base->count);
+    slice->iov[length - 1].iov_len = end.offset;
 }
 
 trstatus tr_iov_alloc_slice(
