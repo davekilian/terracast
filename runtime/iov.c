@@ -88,7 +88,29 @@ triovpos tr_iov_end(const triov *iov)
 triovpos tr_iov_advance(
         const triov *iov,
         const triovpos *pos,
-        unsigned bytes);
+        unsigned bytes)
+{
+    triovpos next = *pos;
+
+    while (bytes > 0 && next.index < iov->count) {
+
+        const struct iovec *item = iov->iov + next.index;
+
+        tr_assert(next.offset <= item->iov_len);
+        unsigned rest = item->iov_len - pos->offset;
+
+        if (rest < bytes) {
+            next.offset += bytes;
+            next.voffset += bytes;
+        } else {
+            next.index += 1;
+            next.offset = 0;
+            next.voffset += rest;
+        }
+    }
+
+    return next;
+}
 
 triovpos tr_iov_rewind(
         const triov *iov,
