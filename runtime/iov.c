@@ -85,6 +85,22 @@ triovpos tr_iov_end(const triov *iov)
     return pos;
 }
 
+triovpos tr_iov_at(const triov *iov, unsigned offset)
+{
+    unsigned remain = offset;
+
+    for (unsigned i = 0; i < iov->count; ++i) {
+        if (remain < iov->iov[i].iov_len) {
+            triovpos pos = { .index = i, .offset = remain, .voffset = offset };
+            return pos;
+        } else {
+            remain -= iov->iov[i].iov_len;
+        }
+    }
+
+    return tr_iov_end(iov);
+}
+
 triovpos tr_iov_advance(
         const triov *iov,
         const triovpos *pos,

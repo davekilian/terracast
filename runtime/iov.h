@@ -76,7 +76,7 @@ triovpos tr_iov_start(const triov *iov);
 
 triovpos tr_iov_end(const triov *iov);
 
-// TODO triovpos at virtual offset
+triovpos tr_iov_at(const triov *iov, unsigned offset);
 
 triovpos tr_iov_advance(
         const triov *iov,
