@@ -171,19 +171,41 @@ To offload a segment, the segment file is reread from durable block storage star
 
 ## Indexing Structures
 
-TODO: at some point while I was drafting this, I decided to go with a full dual-indexing route instead of the original plan, which was to use traditional LSM up until we have a checkpoint or two of data worth merging, at which point the amount of data we're handling becomes large enough that it's worth dual-indexing into row and columnar storage. I don't remember how I got off that track and I want to get back on that track.
 
-So basically what I want here is
 
-* There's a row store as we described above (I've moved that content out of this section)
-* The primary index is an LSM-tree of (primary key) to (row ID in row store)
-* We log directly to the row store for short-term recovery
-* We also lazily build an index-only journal with (primary key to row id) mapping, possibly in whatever order is simplest for the transaction isolation (concurrency control) system
-* In memory, we have a primary key to row ID BST with multiversioning support
-* For any secondary indexes, we also keep a secondary key to row ID BST with multiversioning
-* We checkpoint each primary- and secondary-index to LSM checkpoint B+ trees on disk
-* Transactional and analytical queries all 
-* 
+
+
+
+
+---
+
+TODO at some point while I was drafting this, I decided to go with a full dual-indexing route instead of the original plan, which was to use traditional LSM up until we have a checkpoint or two of data worth merging, at which point the amount of data we're handling becomes large enough that it's worth dual-indexing into row and columnar storage. We need to get back to that. In particular, it's an important part of the distribution and partitoining strategy, since you basically have (small sets of recent data where ingestion performance is key and scanning reads are okay since data is small) coupled with (large sets of historical data where we have time to ingest and want a variety of read queries to be well-supported). This split has implications both for indexing and distribution. Using LSM levels with our single-writer-active/global-reader-sealed segments makes this fairly natural, you emit data out of the write-focused database into globally visible object storage on checkpoint, and then the read-focused indexers asynchronously ingest and merge that data, completing the whole LSM handshake. It's all one big LSM process, but with the checkpoints partitioned one way, and the anchors partitioned another way.
+
+I think what I want here is
+
+* We log rows directly to the row store as described at length above
+* A row index with LSM levels L0, L1 and L2, horizontally partitioned using b-tree-like range splits and merges
+* A column index that is built only by consume L1s to build L2 inverted indexes asynchronously
+* Possibly a separate lazy-built 'index-only' journal that just stores primary key to rowid mappings
+* Probably multiversioning support on the L0 row index to support long-running transactions
+
+Do we want to partition the entire row index so a single node owns the whole thing for a key space? That's very reasonable in terms of wanting to answer point queries by talking to a single node. But another design that may be feasible is a hash-indexed frontend that ingests small amounts of live data, over which we accept most query types other than point lookups are full scans; then have L2 row index partitions and L2 columnar index partitions all consume incoming hash checkpoints. 
+
+---
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ---
 
