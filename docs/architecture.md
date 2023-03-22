@@ -186,14 +186,14 @@ TODO at some point while I was drafting this, I decided to go with a full dual-i
 I think what I want here is
 
 * We log rows directly to the row store as described at length above
-* A row index with LSM levels L0, L1 and L2, horizontally partitioned using b-tree-like range splits and merges
-* A column index that is built only by consume L1s to build L2 inverted indexes asynchronously
-* Possibly a separate lazy-built 'index-only' journal that just stores primary key to rowid mappings
-* Probably multiversioning support on the L0 row index to support long-running transactions
+* A row index with LSM levels L0, L1 and L2, horizontally partitioned using b-tree-like range splits and merges (like cockroachdb)
+* A column index that is built only by consume L1s to build L2 inverted indexes asynchronously with a similar split/merge strategy
+* Possibly a separate lazy-built 'index-only' journal that just stores primary key to rowid mappings for faster recovery
+* Probably multiversioning support on the L0 row index to support long-running transactions (not needed for fast data scans though)
 
 Do we want to partition the entire row index so a single node owns the whole thing for a key space? That's very reasonable in terms of wanting to answer point queries by talking to a single node. But another design that may be feasible is a hash-indexed frontend that ingests small amounts of live data, over which we accept most query types other than point lookups are full scans; then have L2 row index partitions and L2 columnar index partitions all consume incoming hash checkpoints. 
 
-I guess really the point of that last question is that the exactly indexing scheme has to be co-designed with the exact partitioning scheme.
+I guess really the point of that last question is that the exactly indexing scheme has to mesh with the exact partitioning scheme.
 
 ---
 
