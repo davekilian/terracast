@@ -80,6 +80,8 @@ TODO Where do checksums live? Can this layer checksum by itself, or are we relyi
 
 TODO what about encryption? Do we manually encrypt all of our own stuff in-proc, or do we rely on a file system filter kind of thing to do full-volume encryption transparently? Having this layer transparently encrypt stuff in-proc makes more sense here, you basically need a key store with a KEK or something and then you use your catalog to remember which external secret store key is the one you need for these files. Then you plug in a protected key blob into the block/object layer when opening the block/object store and have the abstraction layer transparently encrypt/decrypt on the fly. Ideally this can be done at the abstraction layer, so that the individual store implementations don't have to manage encryption/decryption logic themselves. Also, it'd be nice to include a new checksum on encrypted data post-encryption, which is another good argument for checksumming at this store layer. But we already talked about why that's not such a great idea. Also, it's worth noting the encrypted blob may have extra metadata too, like a unique pseudorandom IV per block so we're not doing plain virtual code book or whatever it's called.
 
+TODO how do we manage secrets?
+
 TODO this plus some other things that have come up elsewhere have me slowly leaning toward making a more foundational TerrascaleFS layer that underpins the database and the raster server, handles all the protection aspects of the system in both cloud-native and local-cluster storage, and possibly opens up the door to for sharing data between accounts in a data marketplace. I need some time to talk myself out of this. Basically the idea is to build a little bit more on the 'segment' file system concept that grew up inside the row store, and make it a more feature-complete append-only dual block/object file system that stores rows, index trees, raster tiles, etc.
 
 * Unified interface for chunks of row store and chunks of indexes
@@ -92,6 +94,7 @@ TODO this plus some other things that have come up elsewhere have me slowly lean
 * Becomes future basis for data sharing across accounts (sealed segments can be published)
 * Natural to add CDN-like functionality such as additional replicas based on scale sets
 * Natural place to support full consistent snapshots of your entire project if ever needed
+* Natural place to implement additional tiering for cost savings, like archival storage
 
 One huge risk is a real single shared file system has permissions problems and a very large namespace. The permissions problems are tacklable by being private by default and keeping data-sharing scenarios simple so we can handle permissions internally. The very large namespaces problem becomes a potentially bigger deal, I don't want trees or inodes in this layer, and I don't want the engineering for this to spiral out of control. Any solution has to use fairly small chunk counts that fit in whatever catalog format we choose per database cluster, and all global sharing has to be handled at some global registry which I'm not designing yet. We also don't want more roles; we need *everything* to work with a library inside the db role and an external catalog. There can't be a master, there can't be heartbeats, and I don't want to have to manage placement locality to put active segments by their owners; that should just work automatically.
 
@@ -191,9 +194,13 @@ I think what I want here is
 * Possibly a separate lazy-built 'index-only' journal that just stores primary key to rowid mappings for faster recovery
 * Probably multiversioning support on the L0 row index to support long-running transactions (not needed for fast data scans though)
 
-Do we want to partition the entire row index so a single node owns the whole thing for a key space? That's very reasonable in terms of wanting to answer point queries by talking to a single node. But another design that may be feasible is a hash-indexed frontend that ingests small amounts of live data, over which we accept most query types other than point lookups are full scans; then have L2 row index partitions and L2 columnar index partitions all consume incoming hash checkpoints. 
+Do we want to partition the entire row index so a single node owns the whole thing for a key space? That's very reasonable in terms of wanting to answer point queries by talking to a single node. But another design that may be feasible is a hash-indexed frontend that ingests small amounts of live data, over which we accept most query types other than point lookups are full scans; then have L2 row index partitions and L2 columnar index partitions all consume incoming hash checkpoints. One thing that makes this attractive is we can put the stream-routing logic in the hassh partitioned live data frontend layer thingamajig and rely on that to scale as horizontally as you want. In fact, you could go completely overboard and just round robin to the 'live' layer as if it's a load balancer ... but then every read has to consult every replica which probably isn't a great. 
 
 I guess really the point of that last question is that the exactly indexing scheme has to mesh with the exact partitioning scheme.
+
+In that light, one thing worth noting is that we don't want to expose all our internal merge progress state to our clients, which means we're compiling queries on our end, which means we load balance queries essentially randomly across the cluster, which means even transactional queries are being planned on a different node than the one(s) storing the affected partition. If we already have to pay a network hop to get from the query managing node to the node(s) which own the partition(s) affected by the transaction, then having more different nodes to consult is more a question of tail latency than anything else. So that's a good argument for letting the L0-1 live data get partitioned independently of L2 data, which opens the door to maybe a consistent hashing approach.
+
+Oh, and there's no reason the node which owns L0 data can't also cache the relevant L2 trees locally ... they're immutable, and this node is the one that kicks off L1->2 merges by publishing its L1 to the historical nodes, so it knows which L1-2 trees are needed to complete its current view of the world.
 
 ---
 
