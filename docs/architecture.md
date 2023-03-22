@@ -83,6 +83,7 @@ TODO what about encryption? Do we manually encrypt all of our own stuff in-proc,
 TODO this plus some other things that have come up elsewhere have me slowly leaning toward making a more foundational TerrascaleFS layer that underpins the database and the raster server, handles all the protection aspects of the system in both cloud-native and local-cluster storage, and possibly opens up the door to for sharing data between accounts in a data marketplace. I need some time to talk myself out of this. Basically the idea is to build a little bit more on the 'segment' file system concept that grew up inside the row store, and make it a more feature-complete append-only dual block/object file system that stores rows, index trees, raster tiles, etc.
 
 * Unified interface for chunks of row store and chunks of indexes
+* No longer a need to distinguish `trfs` vs `trfso` file systems; replication/erasure coding moves up to DFS layer
 * Can handle encryption, compression and checksumming relatively seamlessly given a read block size
 * Becomes future basis for configurable replication and erasure coding on local clusters
 * Active/sealed semantic abstracts away the idea of 'object store' vs 'block store' data
@@ -90,10 +91,11 @@ TODO this plus some other things that have come up elsewhere have me slowly lean
 * Caching can potentially be handled seamlessly (have to be careful with that idea)
 * Becomes future basis for data sharing across accounts (sealed segments can be published)
 * Natural to add CDN-like functionality such as additional replicas based on scale sets
+* Natural place to support full consistent snapshots of your entire project if ever needed
 
-One huge risk is a real single shared file system has permissions problems and a very large namespace. The permissions problems are tacklable by being private by default and keeping data-sharing scenarios simple so we can handle permissions internally. The very large namespaces problem becomes a potentially bigger deal, I don't want the engineering for this to spiral out of control. We also potentially are introducing more roles for file system server and possibly name server nodes, which is yucky.
+One huge risk is a real single shared file system has permissions problems and a very large namespace. The permissions problems are tacklable by being private by default and keeping data-sharing scenarios simple so we can handle permissions internally. The very large namespaces problem becomes a potentially bigger deal, I don't want trees or inodes in this layer, and I don't want the engineering for this to spiral out of control. Any solution has to use fairly small chunk counts that fit in whatever catalog format we choose per database cluster, and all global sharing has to be handled at some global registry which I'm not designing yet. We also don't want more roles; we need *everything* to work with a library inside the db role and an external catalog. There can't be a master, there can't be heartbeats, and I don't want to have to manage placement locality to put active segments by their owners; that should just work automatically.
 
-Another, much smaller risk is the row store was depending on a cleaning step during the sealing process, and that's not going to be possible with an opaque storage system like this. We don't want volatile data that exists only in active segments, that just seems like a recipe for trouble.
+Another, much smaller risk is the row store was depending on a cleaning step during the sealing process, and that's not going to be possible with an opaque storage system like this. We don't want volatile data that exists only in active segments, that just seems like a recipe for trouble. It's easy enough to just leave the opaque data in and treat it as "inactive" space for occupancy calculations though.
 
 ## Row Stores
 
