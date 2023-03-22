@@ -193,6 +193,8 @@ I think what I want here is
 
 Do we want to partition the entire row index so a single node owns the whole thing for a key space? That's very reasonable in terms of wanting to answer point queries by talking to a single node. But another design that may be feasible is a hash-indexed frontend that ingests small amounts of live data, over which we accept most query types other than point lookups are full scans; then have L2 row index partitions and L2 columnar index partitions all consume incoming hash checkpoints. 
 
+I guess really the point of that last question is that the exactly indexing scheme has to be co-designed with the exact partitioning scheme.
+
 ---
 
 
