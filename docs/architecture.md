@@ -97,6 +97,8 @@ One huge risk is a real single shared file system has permissions problems and a
 
 Another, much smaller risk is the row store was depending on a cleaning step during the sealing process, and that's not going to be possible with an opaque storage system like this. We don't want volatile data that exists only in active segments, that just seems like a recipe for trouble. It's easy enough to just leave the opaque data in and treat it as "inactive" space for occupancy calculations though.
 
+A question to ponder is whether segments in this model need a globally unique name like a uuid, or if we can keep segids within the context of a single file system and register segments via an external mapping. I'm leaning toward the latter. It'd be nice to keep segids so the row store can just define a rowid as (segid according to the fs layer) in the high bits and (my own segment-local sequence numbering scheme) in the low bits.
+
 ## Row Stores
 
 TerrascaleDB takes a nod from WiscKey by storing database rows and index trees separately. That is, rows do not appear inside b-tree or LSM tree pages; instead, rows are stored in a separate row store, and index trees reference rows via an external identifier. After a query identifies result rows using a primary or secondary index, it issues additional reads to fetch the rows themselves from the row store. The row store is not modified when an index is checkpointed or merged; instead, row deletions and overwrites are handled with an independent copy-forward garbage collection scheme.
