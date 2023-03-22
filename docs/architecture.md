@@ -80,6 +80,21 @@ TODO Where do checksums live? Can this layer checksum by itself, or are we relyi
 
 TODO what about encryption? Do we manually encrypt all of our own stuff in-proc, or do we rely on a file system filter kind of thing to do full-volume encryption transparently? Having this layer transparently encrypt stuff in-proc makes more sense here, you basically need a key store with a KEK or something and then you use your catalog to remember which external secret store key is the one you need for these files. Then you plug in a protected key blob into the block/object layer when opening the block/object store and have the abstraction layer transparently encrypt/decrypt on the fly. Ideally this can be done at the abstraction layer, so that the individual store implementations don't have to manage encryption/decryption logic themselves. Also, it'd be nice to include a new checksum on encrypted data post-encryption, which is another good argument for checksumming at this store layer. But we already talked about why that's not such a great idea. Also, it's worth noting the encrypted blob may have extra metadata too, like a unique pseudorandom IV per block so we're not doing plain virtual code book or whatever it's called.
 
+TODO this plus some other things that have come up elsewhere have me slowly leaning toward making a more foundational TerrascaleFS layer that underpins the database and the raster server, handles all the protection aspects of the system in both cloud-native and local-cluster storage, and possibly opens up the door to for sharing data between accounts in a data marketplace. I need some time to talk myself out of this. Basically the idea is to build a little bit more on the 'segment' file system concept that grew up inside the row store, and make it a more feature-complete append-only dual block/object file system that stores rows, index trees, raster tiles, etc.
+
+* Unified interface for chunks of row store and chunks of indexes
+* Can handle encryption, compression and checksumming relatively seamlessly given a read block size
+* Becomes future basis for configurable replication and erasure coding on local clusters
+* Active/sealed semantic abstracts away the idea of 'object store' vs 'block store' data
+* Single-writer private vs globally-visible mutable fits a wide variety of access cases
+* Caching can potentially be handled seamlessly (have to be careful with that idea)
+* Becomes future basis for data sharing across accounts (sealed segments can be published)
+* Natural to add CDN-like functionality such as additional replicas based on scale sets
+
+One huge risk is a real single shared file system has permissions problems and a very large namespace. The permissions problems are tacklable by being private by default and keeping data-sharing scenarios simple so we can handle permissions internally. The very large namespaces problem becomes a potentially bigger deal, I don't want the engineering for this to spiral out of control. We also potentially are introducing more roles for file system server and possibly name server nodes, which is yucky.
+
+Another, much smaller risk is the row store was depending on a cleaning step during the sealing process, and that's not going to be possible with an opaque storage system like this. We don't want volatile data that exists only in active segments, that just seems like a recipe for trouble.
+
 ## Row Stores
 
 TerrascaleDB takes a nod from WiscKey by storing database rows and index trees separately. That is, rows do not appear inside b-tree or LSM tree pages; instead, rows are stored in a separate row store, and index trees reference rows via an external identifier. After a query identifies result rows using a primary or secondary index, it issues additional reads to fetch the rows themselves from the row store. The row store is not modified when an index is checkpointed or merged; instead, row deletions and overwrites are handled with an independent copy-forward garbage collection scheme.
