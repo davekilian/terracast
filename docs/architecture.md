@@ -35,15 +35,15 @@ On bare metal cluster scenarios, the machines are preconfigured with a list of e
 
 ## Storage Model
 
-TerrascaleDB includes a thin storage abstraction layer responsible for interfacing with external storage APIs and network interfaces. This eases the process of moving Terrascale between cloud providers and potentially makes it simpler to light up custom hardware solutions and on-prem scenarios. 
+TerrascaleDB includes a thin storage abstraction layer responsible for interfacing with external storage APIs and network interfaces. This eases the process of moving Terrascale between cloud providers and potentially makes it simpler to light up custom hardware solutions and on-prem scenarios. The goal of this layer is to provide abstract semantics; additional services like encryption, checksumming and compression are handled at higher layers.
 
 The storage layer defines three kinds of storage:
 
-* **Block devices** provide a high-cost, low-latency file system with write-in-place semantics. Some block devices are **durable**, making them appropriate for staging customer data. Others are **volatile**, making them appropriate for cache-spilling, staging external writes and storing intermediate results. Block devices are strongly affinitized to a single node in the cluster.
-* **Object stores** provide low-cost, high latency buckets of write-once unstructured data objects. Depending on the implementation, object stores may be strongly consistent or eventually consistent; as such, the object store abstraction is always exposed as eventually consistent. Object stores are not affinitized to nodes, and are often used for cross-node sharing.
-* **Catalogs** are small, strongly consistent key-value stores. These can be used for bookkeeping information needed to detect and correct for object store eventual consistency artifacts, and are also appropriate for other bookkeeping, like the set of tables which exist and their schemas.
+* **Block devices** provide a high-cost, low-latency, full-featured file system with write-in-place semantics. Some block devices are **durable**, making them appropriate for staging customer data; others are **volatile**, making them appropriate for cache-spilling, staging external writes and storing intermediate results. Each block device is privately owned by a single node in the cluster.
+* **Object stores** provide low-cost, high latency buckets of write-once unstructured data objects. Depending on the implementation, object stores may be strongly consistent or eventually consistent; as such, the object store abstraction only provides eventual consistency. Object stores are globally visible across all nodes in a cluster and are often used for sharing data.
+* **Catalogs** are small, strongly consistent, globally visible key-value stores. These are well-tuned for bookkeeping needs, such as storing lists of tables which exist or blocks in the TerrascaleFS file system. Metadata for objects stored in object stores is often stored in catalog, as the strong consistency guarantees of a catalog allows clients to detect eventual-consistency artifacts in the objects themselves. 
 
-The indexing layer consumes this storage model for storing TerrascaleDB's row data and log-structured merge index. Client writes are staged in a write-ahead log stored on a durable block device, and runs of log-structured merge trees are staged to volatile block devices during the checkpointing and merge processes. These structures are lazily destaged into object-store objects and read back in through a tiered memory / volatile block store cache. One catalog store per database instance is used to track tables, schemas, durable block files of note (e.g. the WAL), object store objects (such as the row store and LSM runs), and information needed to recover the WAL (such as replay start pointer).
+TerrascaleFS is layered on top of this model and provides a flat namespace of GFS/HDFS-like append-only blocks with several value-add features, such as encryption, compression, checksumming, replication, snapshots, caching and cost-tiering. Most data in TerrascaleDB is stored in a mixture of storage-layer catalogs and TerrascaleFS blocks.
 
 In the cloud, durable block devices are cloud block stores such as EBS or managed disks accessed through a local file system. Volatile block devices are locally-attached disk instances, also accessed through the local file system. Object stores wrap cloud object stores like S3 and block blobs. Catalogs wrap cloud-native table storage like DynamoDB or Azure's tables. 
 
@@ -51,13 +51,31 @@ In the future, TerrascaleDB may be extended to run on small clusters of hardware
 
 Individual block stores, objects in object stores, and catalog tables are identified using URIs. Terrascale defines a set of custom URI scheme to identify TerrascaleDB data artifacts stored in various external stores:
 
-* `trfs` URIs identify block storage stored as files in a locally accessible file system
-* `trfso` URIs identify object store objects stored as files in a locally accessible file system
-* `trkv` URIs identify catalogs stored using a simple textual key-value format in a file on the local file system
-* `trec2` URIs identify AWS EC2 block devices
-* `trpgblob` URIs identify Azure page blob block devices
-* `trs3` URIs identify AWS S3 objects
-* `trblob` URIs identify Azure block blob objects
+| URI Scheme | Storage Type | Location | Where Stored                   |
+| ---------- | ------------ | -------- | ------------------------------ |
+| `trfs`     | Block        | Local    | Local file system directory    |
+| `trfso`    | Object       | Local    | Local file system directory    |
+| `trkv`     | Catalog      | Local    | Text file in local file system |
+| `trec2`    | Block        | Cloud    | Amazon EC2                     |
+| `trmd`     | Block        | Cloud    | Azure Managed Disk             |
+| `trs3`     | Object       | Cloud    | Amazon S3                      |
+| `trblob`   | Object       | Cloud    | Azure Blob Storage             |
+| `trdyn`    | Catalog      | Cloud    | Amazon DynamoDB                |
+| `trtab`    | Catalog      | Cloud    | Azure Table Storage            |
+
+## Distributed File System
+
+TODO explain as
+
+* Seamless protection activities including encryption, checksumming
+* Native tiering support for cost/performance tradeoff management
+* Manages replication factors
+* Native snapshot and publishing ability for currently-off-roadmap data marketplace scenarios
+* Designed to manage database workloads, tiles, general unstructured storage
+* Optimized for large files changed infrequently read end-to-end or selectively
+* Flat namespace GFS/HDFS with possible future extensibility into full HDFS compatibility
+
+TODO old content to follow:
 
 TODO Where do checksums live? Can this layer checksum by itself, or are we relying on the higher level layers to decide where in the file checksums go? It's possible for a GFS-like stream to manage checksums automatically, but we don't have structured append-only storage. And we likely have file system checksumming underneath us too, but we want to checksum as early as possible and pass checksums down the stack as far as we can. I think there are relatively reasonable checksumming strategies for the indexing layer, like per log flush buffer and per-b-tree page, so it's not a disaster if we push checksumming up a level. But if we can make it transparent at this layer, that's nice. One of the problems with transparent checksumming is this layer doesn't know the read block size of the parent.
 
@@ -84,19 +102,6 @@ One huge risk is a real single shared file system has permissions problems and a
 Another, much smaller risk is the row store was depending on a cleaning step during the sealing process, and that's not going to be possible with an opaque storage system like this. We don't want volatile data that exists only in active segments, that just seems like a recipe for trouble. It's easy enough to just leave the opaque data in and treat it as "inactive" space for occupancy calculations though.
 
 A question to ponder is whether segments in this model need a globally unique name like a uuid, or if we can keep segids within the context of a single file system and register segments via an external mapping. I'm leaning toward the latter. It'd be nice to keep segids so the row store can just define a rowid as (segid according to the fs layer) in the high bits and (my own segment-local sequence numbering scheme) in the low bits.
-
-## Distributed File System
-
-TODO explain as
-
-* Seamless protection activities including encryption, checksumming
-* Native tiering support for cost/performance tradeoff management
-* Manages replication factors
-* Native snapshot and publishing ability for currently-off-roadmap data marketplace scenarios
-* Designed to manage database workloads, tiles, general unstructured storage
-* Optimized for large files changed infrequently read end-to-end or selectively
-* Flat namespace GFS/HDFS with possible future extensibility
-* Probably more
 
 ## Database Architecture Overview
 
