@@ -33,6 +33,10 @@ Terrascale's multi-tenant orchestration service uses a globally distributed thir
 
 On bare metal cluster scenarios, the machines are preconfigured with a list of each others' IP addresses, which is used to bootstrap consensus between each other. The orchestration layer then runs in the context of whichever node is currently leading consensus.
 
+Another important service provided by the orchestration layer is secret management. Keys, certificates and other kinds of secrets needed to access cloud object stores and databases within a Terrascale cluster are stored in the orchestration service's cluster management databases. When a node within a Terrascale cluster needs access to an object store bucket or cloud database, it authenticates itself with the orchestration service by returning the authentication blob it was deployed with, and requests a temporary access token to the relevant object store or cloud database. The orchestrator authenticates and authorizes, generates a token which temporarily grants the bearer access to the requested resource, and returns it to the cluster node. The node marks the expiration time and auto-renews before the deadline to avoid service disruptions.
+
+The same service is also used to manage client-side encryption keys. Nodes request the current encryption key for the cluster's data, bearing the same authentication information as mentioned earlier, as well as a temporary public key for the session. The orchestration service encrypts the cluster encryption key with the node's private key and returns it. The node uses its private key to decrypt this key, and then uses the key as the key-encryption-key for local encryption operations.
+
 ## Storage Model
 
 TerrascaleDB includes a thin storage abstraction layer responsible for interfacing with external storage APIs and network interfaces. This eases the process of moving Terrascale between cloud providers and potentially makes it simpler to light up custom hardware solutions and on-prem scenarios. The goal of this layer is to provide abstract semantics; additional services like encryption, checksumming and compression are handled at higher layers.
@@ -51,59 +55,71 @@ In the future, TerrascaleDB may be extended to run on small clusters of hardware
 
 Individual block stores, objects in object stores, and catalog tables are identified using URIs. Terrascale defines a set of custom URI scheme to identify TerrascaleDB data artifacts stored in various external stores:
 
-| URI Scheme | Storage Type | Location | Where Stored                   |
-| ---------- | ------------ | -------- | ------------------------------ |
-| `trfs`     | Block        | Local    | Local file system directory    |
-| `trfso`    | Object       | Local    | Local file system directory    |
-| `trkv`     | Catalog      | Local    | Text file in local file system |
-| `trec2`    | Block        | Cloud    | Amazon EC2                     |
-| `trmd`     | Block        | Cloud    | Azure Managed Disk             |
-| `trs3`     | Object       | Cloud    | Amazon S3                      |
-| `trblob`   | Object       | Cloud    | Azure Blob Storage             |
-| `trdyn`    | Catalog      | Cloud    | Amazon DynamoDB                |
-| `trtab`    | Catalog      | Cloud    | Azure Table Storage            |
+| URI Scheme | Storage Type | Location | Where Stored                           |
+| ---------- | ------------ | -------- | -------------------------------------- |
+| `trfs`     | Block/Object | Local    | Files in a local file system directory |
+| `trkv`     | Catalog      | Local    | Text file in local file system file    |
+| `trec2`    | Block        | Cloud    | Amazon EC2                             |
+| `trmd`     | Block        | Cloud    | Azure Managed Disk                     |
+| `trpgblob` | Block        | Cloud    | Azure Managed Disk                     |
+| `trs3`     | Object       | Cloud    | Amazon S3                              |
+| `trblob`   | Object       | Cloud    | Azure Blob Storage                     |
+| `trdyn`    | Catalog      | Cloud    | Amazon DynamoDB                        |
+| `trtab`    | Catalog      | Cloud    | Azure Table Storage                    |
 
 ## Distributed File System
 
-TODO explain as
+TerrascaleFS (TRFS) is a simple, fully-distributed file system which runs locally inside a Terrascale cluster, either on bare metal hardware or in the cloud. It provides similar semantics to the Google File System (GFS), Hadoop File System (HDFS) and Azure Storage Stream Layer, but uses a simple, flat namespace of inode numbers instead of a hierarchical directory structure. TerrascaleFS can seamlessly encrypt, checksum, compress, tier, cache, replicate and erasure-code data within in the file system. 
 
-* Seamless protection activities including encryption, checksumming
-* Native tiering support for cost/performance tradeoff management
-* Manages replication factors
-* Native snapshot and publishing ability for currently-off-roadmap data marketplace scenarios
-* Designed to manage database workloads, tiles, general unstructured storage
-* Optimized for large files changed infrequently read end-to-end or selectively
-* Flat namespace GFS/HDFS with possible future extensibility into full HDFS compatibility
+Currently, Terrascale uses TRFS as the underlying storage for TerrascaleDB and raster image tiles. In the future, TRFS could be exposed to customers directly for custom (Hadoop/Spark/Storm-style) analysis over structured database data, unstructured tile data, and unstructured customer-data stored directly in the cluster's TRFS cluster. TRFS also provides the potential basis for a data publishing, sharing, and marketplace service, allowing users to share their data and analysis between clusters.
 
-TODO old content to follow:
+### File System Semantics
 
-TODO Where do checksums live? Can this layer checksum by itself, or are we relying on the higher level layers to decide where in the file checksums go? It's possible for a GFS-like stream to manage checksums automatically, but we don't have structured append-only storage. And we likely have file system checksumming underneath us too, but we want to checksum as early as possible and pass checksums down the stack as far as we can. I think there are relatively reasonable checksumming strategies for the indexing layer, like per log flush buffer and per-b-tree page, so it's not a disaster if we push checksumming up a level. But if we can make it transparent at this layer, that's nice. One of the problems with transparent checksumming is this layer doesn't know the read block size of the parent.
+TODO flat namespace of file each with a unique 32-bit inode number
 
-TODO what about encryption? Do we manually encrypt all of our own stuff in-proc, or do we rely on a file system filter kind of thing to do full-volume encryption transparently? Having this layer transparently encrypt stuff in-proc makes more sense here, you basically need a key store with a KEK or something and then you use your catalog to remember which external secret store key is the one you need for these files. Then you plug in a protected key blob into the block/object layer when opening the block/object store and have the abstraction layer transparently encrypt/decrypt on the fly. Ideally this can be done at the abstraction layer, so that the individual store implementations don't have to manage encryption/decryption logic themselves. Also, it'd be nice to include a new checksum on encrypted data post-encryption, which is another good argument for checksumming at this store layer. But we already talked about why that's not such a great idea. Also, it's worth noting the encrypted blob may have extra metadata too, like a unique pseudorandom IV per block so we're not doing plain virtual code book or whatever it's called.
+TODO no permissions management, access only within the local cluster
 
-TODO how do we manage secrets?
+TODO files are large and made up of independent blocks
 
-TODO this plus some other things that have come up elsewhere have me slowly leaning toward making a more foundational TerrascaleFS layer that underpins the database and the raster server, handles all the protection aspects of the system in both cloud-native and local-cluster storage, and possibly opens up the door to for sharing data between accounts in a data marketplace. I need some time to talk myself out of this. Basically the idea is to build a little bit more on the 'segment' file system concept that grew up inside the row store, and make it a more feature-complete append-only dual block/object file system that stores rows, index trees, raster tiles, etc.
+TODO create and delete
 
-* Unified interface for chunks of row store and chunks of indexes
-* No longer a need to distinguish `trfs` vs `trfso` file systems; replication/erasure coding moves up to DFS layer
-* Can handle encryption, compression and checksumming relatively seamlessly given a read block size
-* Becomes future basis for configurable replication and erasure coding on local clusters
-* Active/sealed semantic abstracts away the idea of 'object store' vs 'block store' data
-* Single-writer private vs globally-visible mutable fits a wide variety of access cases
-* Caching can potentially be handled seamlessly (have to be careful with that idea)
-* Becomes future basis for data sharing across accounts (sealed segments can be published)
-* Natural to add CDN-like functionality such as additional replicas based on scale sets
-* Natural place to support full consistent snapshots of your entire project if ever needed
-* Natural place to implement additional tiering for cost savings, like archival storage
+TODO active files are local, support appends, are scanned in full on open, for recovery logs and staging objects
 
-One huge risk is a real single shared file system has permissions problems and a very large namespace. The permissions problems are tacklable by being private by default and keeping data-sharing scenarios simple so we can handle permissions internally. The very large namespaces problem becomes a potentially bigger deal, I don't want trees or inodes in this layer, and I don't want the engineering for this to spiral out of control. Any solution has to use fairly small chunk counts that fit in whatever catalog format we choose per database cluster, and all global sharing has to be handled at some global registry which I'm not designing yet. We also don't want more roles; we need *everything* to work with a library inside the db role and an external catalog. There can't be a master, there can't be heartbeats, and I don't want to have to manage placement locality to put active segments by their owners; that should just work automatically.
+TODO sealed files are global, immutable, and can be read selectively
 
-Another, much smaller risk is the row store was depending on a cleaning step during the sealing process, and that's not going to be possible with an opaque storage system like this. We don't want volatile data that exists only in active segments, that just seems like a recipe for trouble. It's easy enough to just leave the opaque data in and treat it as "inactive" space for occupancy calculations though.
+TODO blocks are the smallest unit of read, a single append appends one or more blocks, each independently encrypted/compressed/checksummed
 
-A question to ponder is whether segments in this model need a globally unique name like a uuid, or if we can keep segids within the context of a single file system and register segments via an external mapping. I'm leaning toward the latter. It'd be nice to keep segids so the row store can just define a rowid as (segid according to the fs layer) in the high bits and (my own segment-local sequence numbering scheme) in the low bits.
+TODO blocks can never be overwritten; must delete entire file wholesale
 
-## Database Architecture Overview
+### Namespace Management
+
+TODO what gets stored in catalogs and how inode numbers are allocated and recycled
+
+### Files and Blocks
+
+TODO we have to manage a logical mapping between ranges within a file and physical locations where things are stored, given we have lookaside information like checksums and encryption IVs, and compression also changes the relative sizes of blocks on disk. This is a problem I missed thinking about back when TRFS was part of the TRDB row store so I'm glad we're thinking about this now. One possible scheme is to take advantage of the tiering process and keep append block headers inline for active files but then stick it in a header, footer or separate lookaside file for sealed files; that provides single-I/O appends for active files but it also means a full scan is needed to open one of these things while they're still active.
+
+TODO we also need to talk about how we store encrypted key blobs and rely on the caller to provide a key-encryption-key protected by the local TPM.
+
+### Append Buffering
+
+TODO this is where we should talk about buffering to the SSD page size and holding append operations until the data is flushed, unless maybe it sometimes makes sense to request a 'best-effort' append that returns as soon as it's buffered. The flush timeout is configurable and early flushes lead to wasted space which is cleaned when the file is sealed and published
+
+### Sealing and Publishing
+
+TODO this is the first time we talk about durable block storage for active/private and object storage for sealed/public with optional caching through a volatile block device.
+
+### Cached Reads and Prefetching
+
+TODO we use an LRU cache for extents and probably don't prefetch anything? Think about this some more. Maybe we don't do caching at this layer and it's fine. Or maybe unifying cache management does make sense. I'm not really sure.
+
+### Replication and Erasure Coding
+
+TODO for cloud-native storage devices, we default to a single replica. For local development scenarios, we keep a single replica in the local file system. For bare metal clustering scenarios, we will eventually need to support configurable replication factors and erasure coding. We may also need configurable replication factors for raster tiles anyways.
+
+### Snapshots and Export
+
+TODO just hint at future work, we may want to 
 
 ## Database Workloads
 
@@ -125,7 +141,44 @@ Kinds of queries we expect and optimize for include...
 
 Data types include scalar values, one-dimensional ranges, n-dimensional spaces and time. Although there is nothing stopping users from placing JSON or XML data in string columns, TerrascaleDB does not currently include first-class support for semi-structured data.
 
+## Database Architecture
+
+TODO a draft scheme from yesterday: hash-partitioned range trees
+
+- L0 is a hash-partitioned range index
+- The database space is partitioned at L0 by hash on the primary key
+- The L0 node set can scale elastically using consistent hashing
+- At L0 the trees themselves are still sorted and support range queries
+- A distributed versioning system for cross-partition snapshot isolated reads
+- Individual L0 trees are multiversioned according to distribution
+- A Paxos atomic commit scheme for cross-partition updates
+- L1 trees are served by the L0 nodes using the same partition scheme
+- L0 nodes transparently share or combine L1s after repartitioning
+- L2 trees are served by the analysis nodes with size-based range partitioning
+- L2 trees include row indexed and inverted column indexed representations
+- A load balancer assigns queries to nodes arbitrarily for coordination
+- Transaction coordinators contact L0-1-2 partitions as needed
+- Realtime routing system integrated at the L0 layer
+- Distributed transaction to replicate routes across all hash partitions
+- Like druid, our node role names are realtime (L0-1) and historical (L2)
+- Point read by primary key contacts realtime by hash, historical by partition map
+- Other reads go to all realtimes, associated historicals, snapshot isolated
+- Single insert/deletes directly contact the associated realtime node
+- Bulk insert/deletes segment by realtime, executed as a distributed transaction
+- Primary-key updates contact realtime node, which reads L2 inline for RMW
+- All other updates use same path, but for all realtimes as a distributed transaction
+
 ## Row Stores
+
+
+
+---
+
+TODO the original TRFS grew up as ideas needed to manage this row store; now those need to be teased apart. This section will be mostly the same as before, but a lot of the details have been moved to the FS layer
+
+---
+
+
 
 TerrascaleDB takes a nod from WiscKey by storing database rows and index trees separately. That is, rows do not appear inside b-tree or LSM tree pages; instead, rows are stored in a separate row store, and index trees reference rows via an external identifier. After a query identifies result rows using a primary or secondary index, it issues additional reads to fetch the rows themselves from the row store. The row store is not modified when an index is checkpointed or merged; instead, row deletions and overwrites are handled with an independent copy-forward garbage collection scheme.
 
