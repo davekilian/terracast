@@ -77,29 +77,34 @@ TerrascaleFS (TRFS) is a simple, fully-distributed file system which runs locall
 
 Currently, Terrascale uses TRFS as the underlying storage for TerrascaleDB and raster image tiles. In the future, TRFS could be exposed to customers directly for custom (Hadoop/Spark/Storm-style) analysis over their structured database data, raster tiles, and anything else they store in the cluster's file system as unstructured file data. Isolating the file system from higher-level activites also makes it possible to add selective cross-cluster sharing or TRFS files, enabling potential data publishing, sharing and marketplace scenarios.
 
-### File System Semantics
+### API Semantics
 
-TODO flat namespace of file each with a unique 32-bit inode number
+TerrascaleFS is a distributed file system. Each Terrascale instance has its own private TerrascaleFS file system instance running inside the cluster. All data for a TerrascaleFS file system is stored externally in cloud block storage, object storage, and database tables.
 
-TODO no permissions management, access only within the local cluster
+TerrascaleFS provides a distributed flat namespace. Each **file** within the namespace is an unstructured byte array of varying lengths. The caller can choose length limits for its files; typically, a file size limits are the range of 512MB-2GB. Each file is identified by a 32-bit **inode** number, which is unique across all files stored within a cluster's TerrascaleFS instance. Clients directly create, open and delete files using inode numbers; there is no directory hierarchy or file names. (However, it is possible in principle to bolt a naming scheme on top of TerrascaleFS, if ever needed, by mapping directories and names to inode numbers.)
 
-TODO files are large and made up of independent blocks
+TerrascaleFS protects its files from external access by securing its cloud object store and database endpoints, as well as encryptting all file contents. Cloud storage endpoints are never left public, and all file contents are always encrypted on disk. However, for authenticated and authorized nodes internal to the cluster, TerrascaleFS does not provide file system permissions. Any node in a Terrascale cluster can open, read, write or delete any file in the cluster's local TerrascaleFS file system instance.
 
-TODO create and delete
+There are two types of files in a TerrascaleFS file system. An **active** file is mutable and has a single writer. Each active file belongs to a single node in the cluster, and can only be read or written by that node. Active files may be stored in durable or volatile block storage, depending on the caller's durability requirements. In contrast, **sealed** files are immutable, and can be read by any node in the cluster. TerrascaleFS automatically tiers files, storing active files in low-latency high-cost block storage, and offloading sealed files to high-latency low-cost object stores. TerrascaleFS can also cache and prefetch sealed file data locally in volatile block storage for quick access.
 
-TODO active files are local, support appends, are scanned in full on open, for recovery logs and staging objects
+The following table summaries active vs sealed file semantics:
 
-TODO sealed files are global, immutable, and can be read selectively
+|               | Active                   | Sealed                   |
+| ------------- | ------------------------ | ------------------------ |
+| Writes        | Append-Only              | Not Supported            |
+| Reads         | Full scan                | Paged                    |
+| Stored in ... | Block storage            | Object storage           |
+| Visibility    | Private to a single node | Public to entire cluster |
 
-TODO blocks are the smallest unit of read, a single append appends one or more blocks, each independently encrypted/compressed/checksummed
+Internally, a TerrascaleFS file is composed of small, independent **blocks**, each about 1-64KB in size. Each block is independently encrypted, compressed and checksummed; TerrascaleFS internally manages block-level metadata transparently to the caller. Blocks are the smallest unit of read, since the entire block must be read from external storage in order to decrypt and decompress the block and verify its checksum. A single append operation can append one or more blocks atomically to the end of a file. Once a block has been written, it cannot be overwritten; the only way to modify a block is to delete the entire file which contains the block.
 
-TODO blocks can never be overwritten; must delete entire file wholesale
+A table of files, indexed by inode number, is stored in a cluster-global catalog (catalogs are covered in depth in the previous section of this document). Each row contains the file's inode number, URI to the underlying block or object storage location for this file, the active/sealed state, and the node which currently owns this file (for active files). A second table of unused inode number ranges is used to efficiently allocate and recycle inode numbers in a peer-to-peer manner as files are allocated and deleted. All operations on these catalog tables are performed directly by the nodes which need to create, delete and enumerate files; unlike GFS and HDFS, TRFS does not rely on a global coordinator to manage the namespace.
 
 ### Namespace Management
 
-TODO what gets stored in catalogs and how inode numbers are allocated and recycled
+TODO what gets stored in catalogs and how inode numbers are allocated and recycled. There was content for this under the row store, probably just need to expand a little bit.
 
-### Files and Blocks
+### Block Storage
 
 TODO we have to manage a logical mapping between ranges within a file and physical locations where things are stored, given we have lookaside information like checksums and encryption IVs, and compression also changes the relative sizes of blocks on disk. This is a problem I missed thinking about back when TRFS was part of the TRDB row store so I'm glad we're thinking about this now. One possible scheme is to take advantage of the tiering process and keep append block headers inline for active files but then stick it in a header, footer or separate lookaside file for sealed files; that provides single-I/O appends for active files but it also means a full scan is needed to open one of these things while they're still active.
 
