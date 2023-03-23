@@ -75,7 +75,7 @@ Individual block stores, objects in object stores, and catalog tables are identi
 
 TerrascaleFS (TRFS) is a simple, fully-distributed file system which runs locally inside a Terrascale cluster, either on bare metal hardware or in the cloud. It provides similar semantics to the Google File System (GFS), Hadoop File System (HDFS) and Azure Storage Stream Layer, but uses a simple, flat namespace of inode numbers instead of a hierarchical directory structure. TerrascaleFS can seamlessly encrypt, checksum, compress, tier, cache, replicate and erasure-code data within in the file system. 
 
-Currently, Terrascale uses TRFS as the underlying storage for TerrascaleDB and raster image tiles. In the future, TRFS could be exposed to customers directly for custom (Hadoop/Spark/Storm-style) analysis over structured database data, unstructured tile data, and unstructured customer-data stored directly in the cluster's TRFS cluster. TRFS also provides the potential basis for a data publishing, sharing, and marketplace service, allowing users to share their data and analysis between clusters.
+Currently, Terrascale uses TRFS as the underlying storage for TerrascaleDB and raster image tiles. In the future, TRFS could be exposed to customers directly for custom (Hadoop/Spark/Storm-style) analysis over their structured database data, raster tiles, and anything else they store in the cluster's file system as unstructured file data. Isolating the file system from higher-level activites also makes it possible to add selective cross-cluster sharing or TRFS files, enabling potential data publishing, sharing and marketplace scenarios.
 
 ### File System Semantics
 
