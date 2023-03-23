@@ -106,17 +106,21 @@ Two catalog tables are used to manage the state of the TerrascaleFS file namespa
 
 A second table of unused inode number ranges is used to efficiently allocate and recycle inode numbers in a peer-to-peer manner. Each row of this table is represents a contiguous range of available inodes. To allocate an inode, a node chooses a row at random, takes the lowest inode from that row, and does a batch transaction which deletes the original range and inserts a new row for the unallocated remainder of the range. For example, if the allocator picks the row (100, 200), it might allocate inode number 100, delete the (100, 200) row and insert a (101, 200) row in its place. When a file is deleted, its inode number is recycled back into this table, by merging it with the neighboring range(s) if possible, or adding it as a standalone row otherwise.
 
-### Block Format
+### Block Addressing
 
-TerrascaleFS files expose an API interface where a single file appears to be a byte array, consisting of the concatenated contents of each block that was appended to that file. Internally, the file system layer also must manage block-level metadata, such as checksums, encryption metadata such as initialization vectors, and so on.
+TerrascaleFS files expose an API interface where a single file appears to be a byte array, consisting of the concatenated contents of each block that was appended to that file. These logical addresses do not map cleanly to byte offsets on disk: each block is compressed, meaning the actual size of the block on disk is not the same as its logical size as seen by the caller, and second, the file system needs to manage block-level metadata including checksums, initialization vectors for encryption, and so on.
 
-TODO on active files, each block header appears prior to the block data on disk. An in-memory index mapping logical block addresses to physical locations in the file is built incrementally as the file is scanned; the first time the file is read, the fs internally scans for append blocks until it finds the data requested, and caches the index in memory.
+For each file it has open, TerrascaleFS caches in the client's memory a small index mapping logical block addresses (that is, the file offsets of each block as viewed by the API caller) to physical block addresses (the location on-disk where the encrypted, compressed block is stored). This is accomplished using two 32-bit offsets (one logical and one physical) per block, which has low memory overhead: a file with 100,000 blocks would require less than a megabyte of index overhead in memory.
 
-TODO when an active file is sealed, it is rewritten in a cleaning process, which is described in the Sealing and Publishing subheading later. During this process, the block-level metadata is TODO written to a second log? Appended at the end? Prepended at the beginning?
+Active files are stored as a single sequential log of blocks, where each block's metadata is stored as a header that immediately precedes the encrypted, compressed block contents on disk. Storing the header inline with the data ensures that one append from the client's perspective is satisfied with only one disk write on the backend. Among other metadata, the block header records both the physical size of the block's contents on data (useful for finding the byte offset of the next block's header) as well as the logical size of the block as seen by the caller after decryption and decompression. The logical-to-physical address mapping is built by scanning the file when it is first opened, and is maintained incrementally as more blocks are appended to the file. Scanning the full file on open is acceptable because it is rare for the system to reopen an active file; in most cases, this happenss during fault recovery paths where the full file needs to be read anyways.
 
-TODO what is the granularity of encryption? Does every file need to store a key blob that's encrypted with the cluster's key-encrypting key?
+Sealed files are stored using the same format, except that an additional precomputed logical-to-physical offset mapping is stored directly in the file. This allows the system to efficeintly load and cache the logical-physical mapping when the file is first opened, without the need for a full scan. Sealed files are immutable, and often many times larger than the average active file, so precomputing this mapping helps make demand-paging read patterns sufficiently fast. The logical-physical mapping is built in the process of cleaning the file for publishing, as will be described in the Sealing and Publishing section below.
 
-### Append Buffering
+### Encryption
+
+TODO does every file get its own encryption key? Maybe we store the key using the cluster's KEK?
+
+### Buffering Appends
 
 TODO this is where we should talk about buffering to the SSD page size and holding append operations until the data is flushed, unless maybe it sometimes makes sense to request a 'best-effort' append that returns as soon as it's buffered. The flush timeout is configurable and early flushes lead to wasted space which is cleaned when the file is sealed and published
 
@@ -124,7 +128,7 @@ TODO this is where we should talk about buffering to the SSD page size and holdi
 
 TODO this is the first time we talk about durable block storage for active/private and object storage for sealed/public with optional caching through a volatile block device.
 
-### Cached Reads and Prefetching
+### Caching and Prefetching
 
 TODO we use an LRU cache for extents and probably don't prefetch anything? Think about this some more. Maybe we don't do caching at this layer and it's fine. Or maybe unifying cache management does make sense. I'm not really sure.
 
@@ -191,7 +195,7 @@ TODO a draft scheme from yesterday: hash-partitioned range trees
 
 ---
 
-TODO the original TRFS grew up as ideas needed to manage this row store; now those need to be teased apart. This section will be mostly the same as before, but a lot of the details have been moved to the FS layer
+TODO the dfs layer originally grew up as ideas needed to manage this row store; now those need to be removed from here. This section will be mostly the same as before, but a lot of the details have been moved to the FS layer
 
 ---
 
