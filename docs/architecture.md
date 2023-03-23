@@ -100,17 +100,21 @@ Internally, a TerrascaleFS file is composed of small, independent **blocks**, of
 
 ### Namespace Management
 
-Unlike GFS and HDFS, TerrascaleFS does not rely on a global coordinator to manage the namespace. Instead, namespace-level information is stored in an external catalog, which all peers in a Terrascale cluster manage together using atomic transactions. For more details about catalogs, see the Storage Model section above.
+Unlike GFS and HDFS, TerrascaleFS does not rely on a global coordinator to manage the namespace. Instead, namespace-level information is stored in an external catalog, which all peers in a Terrascale cluster manage together using atomic transactions. For more details about catalogs, see the Storage Interfaces section above.
 
 Two catalog tables are used to manage the state of the TerrascaleFS file namespace. The first is a table of files, where row contains the file's inode number, URI to the underlying block or object storage location for this file, the active/sealed state, and the node which currently owns this file (for active files). File create and delete options are committed by inserting and deleting rows from this table, respectively. As an active file is sealed and offloaded, its state and, eventually, its URI are updated in this table.
 
 A second table of unused inode number ranges is used to efficiently allocate and recycle inode numbers in a peer-to-peer manner. Each row of this table is represents a contiguous range of available inodes. To allocate an inode, a node chooses a row at random, takes the lowest inode from that row, and does a batch transaction which deletes the original range and inserts a new row for the unallocated remainder of the range. For example, if the allocator picks the row (100, 200), it might allocate inode number 100, delete the (100, 200) row and insert a (101, 200) row in its place. When a file is deleted, its inode number is recycled back into this table, by merging it with the neighboring range(s) if possible, or adding it as a standalone row otherwise.
 
-### Block Storage
+### Block Format
 
-TODO we have to manage a logical mapping between ranges within a file and physical locations where things are stored, given we have lookaside information like checksums and encryption IVs, and compression also changes the relative sizes of blocks on disk. This is a problem I missed thinking about back when TRFS was part of the TRDB row store so I'm glad we're thinking about this now. One possible scheme is to take advantage of the tiering process and keep append block headers inline for active files but then stick it in a header, footer or separate lookaside file for sealed files; that provides single-I/O appends for active files but it also means a full scan is needed to open one of these things while they're still active.
+TerrascaleFS files expose an API interface where a single file appears to be a byte array, consisting of the concatenated contents of each block that was appended to that file. Internally, the file system layer also must manage block-level metadata, such as checksums, encryption metadata such as initialization vectors, and so on.
 
-TODO we also need to talk about how we store encrypted key blobs and rely on the caller to provide a key-encryption-key protected by the local TPM.
+TODO on active files, each block header appears prior to the block data on disk. An in-memory index mapping logical block addresses to physical locations in the file is built incrementally as the file is scanned; the first time the file is read, the fs internally scans for append blocks until it finds the data requested, and caches the index in memory.
+
+TODO when an active file is sealed, it is rewritten in a cleaning process, which is described in the Sealing and Publishing subheading later. During this process, the block-level metadata is TODO written to a second log? Appended at the end? Prepended at the beginning?
+
+TODO what is the granularity of encryption? Does every file need to store a key blob that's encrypted with the cluster's key-encrypting key?
 
 ### Append Buffering
 
@@ -132,15 +136,13 @@ TODO for cloud-native storage devices, we default to a single replica. For local
 
 TODO just hint at future work, we may want to support these kinds of features in order to export files to a central registry for sharing and marketplace scenarios which are currently off-roadmap.
 
-## TerrascaleDB Overview
+## Database Engine
 
-TODO preamble
+TerrascaleDB is Terrascale's massively parallel data management engine for structured data. It implements a hybrid transactional/analytical database with support for high-volume short-lived transactional queries in tandem with low-volume resource-intensive analytical (cross-tabulation) queries over scalar, 1D range, and multidimensional spatial/temporal data, with native support for spatial queries and spatial joins. Using a SQL interface, users can run queries on a finite point in time, or update continually over real-time streaming data. Users can independently scale compute and storage resources as a means to control the cost-performance tradeoff of their queries.
 
 ### Workloads
 
-TerrascaleDB is a hybrid transactional/analytical database with support for high-volume short-lived transactional queries in tandem with low-volume resource-intensive analytical (cross-tabulation) queries. Queries can execute on a finite point in time, or update continually over real-time streaming data. Users can independently scale compute and storage resources as a means to control the cost-performance tradeoff of their queries.
-
-Kinds of queries we expect and optimize for include...
+The following classes of database transactions are expected and thus optimized for:
 
 **Point reads and writes**: Workloads where users build their datasets from operational data such as sensor data ingestion or logging human interactions with software, will be characterized by point writes, potentially at a high rate with high parallelism, with each write inserting a single row. From Terrascale's point of view, these workloads may be write-only (when users host their operations in a separate system and stream updates to Terrascale, e.g. using a mechanism like Postgres's change data capture), or they may be a read-write-mix if users directly host their operations in Terrascale. In general, the point reads and writes generated by this aspect of a customer workload will each be confined to a single table partition.
 
