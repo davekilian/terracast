@@ -128,9 +128,13 @@ TODO for cloud-native storage devices, we default to a single replica. For local
 
 ### Snapshots and Export
 
-TODO just hint at future work, we may want to 
+TODO just hint at future work, we may want to support these kinds of features in order to export files to a central registry for sharing and marketplace scenarios which are currently off-roadmap.
 
-## Database Workloads
+## TerrascaleDB Overview
+
+TODO preamble
+
+### Workloads
 
 TerrascaleDB is a hybrid transactional/analytical database with support for high-volume short-lived transactional queries in tandem with low-volume resource-intensive analytical (cross-tabulation) queries. Queries can execute on a finite point in time, or update continually over real-time streaming data. Users can independently scale compute and storage resources as a means to control the cost-performance tradeoff of their queries.
 
@@ -150,7 +154,7 @@ Kinds of queries we expect and optimize for include...
 
 Data types include scalar values, one-dimensional ranges, n-dimensional spaces and time. Although there is nothing stopping users from placing JSON or XML data in string columns, TerrascaleDB does not currently include first-class support for semi-structured data.
 
-## Database Architecture
+### Architecture
 
 TODO a draft scheme from yesterday: hash-partitioned range trees
 
