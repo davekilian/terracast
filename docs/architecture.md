@@ -175,11 +175,20 @@ These are managed in any number of local on-disk LRU caches, each with a size li
 
 ### Replication and Erasure Coding
 
-TODO for cloud-native storage devices, we default to a single replica. For local development scenarios, we keep a single replica in the local file system. For bare metal clustering scenarios, we will eventually need to support configurable replication factors and erasure coding. We may also need configurable replication factors for raster tiles anyways.
+TerrascaleFS does not replicate or erasure-code its files.
 
-### Snapshots and Export
+TerrascaleFS files stored in cloud-native stores do not need replication; this would be redundant, since cloud stores are already replicated on the backend anyways, and their cost structure reflects this. In the future, we may wish to run Terrascale clusters on bare metal hardware. To enable this scenario, we will implement new block and object storage devices (per the Storage Interfaces heading earlier in this document) which internall replicate and/or erasure code data seamlessly. Either way, TerrascaleFS manages one 'logical' replica of each file, and relies on the underlying storage system to provide durability and availability guarantees which are almost certain to be provided through a replication/coding scheme.
 
-TODO just hint at future work, we may want to support these kinds of features in order to export files to a central registry for sharing and marketplace scenarios which are currently off-roadmap.
+Some parts of Terrascale benefit from managing data with certain replication factors; this is useful for some raster tiling workloads, for example. Upper layers implement this by caching public, immutable TerrascaleFS files on node-local block storage and/or CDN networks. TerrascaleFS itself is not responsible for replicating data.
+
+### Cross-Cluster Sharing
+
+In the future, it may be useful to support scenarios where data in one cluster is shared across clusters; for example, this enables users to share data across their different Terrascale clusters, and it also provides the basis for a future product which allows users to open-source their data and their analysis of that data. Scenarios like this are currently off-roadmap; however, they can be implemented simply using features already provided:
+
+* For any file which needs to be published to another cluster, the publishing system seals and publishes the file, and adds a reference to the file's reference count which is owned by each copy of the file which has been externally published
+* An entry is added to an external registry, with its own universal addressing scheme, pointing to the cluster's inode table and the inode number of the file whose contents are to be published
+
+The external registry would also need to implement its own permissions system, and the cloud orchestration layer would need to be updated to allow the registry to obtain temporary access to the cluster's cloud endpoints (to access the inode table in catalog storage and the file contents in object storage) as well as the cluster's current key-encryption key (in order to decrypt the file contents it retrieves).
 
 ## Database Engine
 
