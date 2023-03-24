@@ -166,7 +166,12 @@ Once this file is completed, the inode table row is updated to (a) mark the file
 
 ### Caching and Prefetching
 
-TODO we use an LRU cache for extents and probably don't prefetch anything? Think about this some more. Maybe we don't do caching at this layer and it's fine. Or maybe unifying cache management does make sense. I'm not really sure.
+As mentioned previously, TerrascaleFS caches block header indexes for opened files in memory. It can also be configured to cache additional information in volatile block storage, including
+
+* Block header tables and indexes of files that were recently closed
+* Postprocessed (compressed and encrypted) contents of blocks which were recently read
+
+These are managed in any number of local on-disk LRU caches, each with a size limit determined by the caller.
 
 ### Replication and Erasure Coding
 
