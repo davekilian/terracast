@@ -1,20 +1,21 @@
 # Terrascale: Planet-Scale Analytics
 
-Terrascale is a cloud-native data storage, analysis and visualization engine with first-class support for geospatial data and real-time streaming. It includes
+Terrascale is a open-core cloud-native data storage, analysis and visualization engine with first-class support for geospatial data and real-time streaming. It includes
 
 * An HTAP database with ANSI SQL support and Python programmability
+* A distributed, replicated file system for large scale data storage
 * First-class support for geospatial vector data and raster images
 * First-class support for incremental queries over real-time data
 * A programmable, embeddable visualizer for scalar, vector-image and raster-image queries
 * A collaborative editor with real-time, CRDT-resolved edits and version history
 * Source data snapshots and version control
 
-Terrascale is designed to support a variety of user scenarios involving real-world data and measurements, including online operations and offline analysis, all on a single dataset. For example, a customer might use Terrascale to build realtime monitoring, visualization and alerting for autonomous vehicles, then run large-scale analysis to mine their operational data for trend insights. Others might use Terrascale to integrate satellite raster data with on-the-ground sensors data collected in real time via an IoT network, to feed online or offline analysis and/or monitoring. Terrascale is well suited for geographic analysis scenarios, but it is not a full GIS suite; however, its extensibility model allows it to act as a potential basis for one.
+Terrascale is designed to support a variety of user scenarios involving real-world data and measurements, including online operations and offline analysis, all on a single dataset. For example, a customer might use Terrascale to build realtime monitoring, visualization and alerting for autonomous vehicles, then run large-scale analysis to mine their operational data for trend insights. Others might use Terrascale to integrate satellite raster data with on-the-ground sensors data collected in real time via an IoT network, to feed online or offline analysis and/or monitoring. Terrascale is well suited for geographic analysis scenarios, but it is not a full GIS suite; however, its extensibility model allows it to serve as a potential basis for one.
 
 Terrascale consists of the following software components:
 
-* TerrascaleFS, a cloud-native distributed file system for unstructured data storage
-* TerrascaleDB, a distributed HTAP SQL engine with first-class geospatial support
+* TerrascaleFS (TRFS), a cloud-native distributed file system for unstructured data storage
+* TerrascaleDB (TRDB), a distributed HTAP SQL engine with first-class geospatial support
 * The Tile Delivery Network (TDN), a CDN and processing engine for tiled raster images
 * Terrascale's Visualizer, a high-performance in-browser 2D rendering engine and database client
 * Terrascale Projects, a real-time collaborative, version-controlled studio for scientific analysis
@@ -27,7 +28,9 @@ In this document, we will build Terrascale from the bottom up, starting from our
 
 ## Cloud Provisioning
 
-Terrascale clusters are small (<100 node) groups of virtual machines running in a third-party cloud such as AWS, Azure or GCP. Terrascale clusters are similar in spirit to Snowflake's virtual warehouse API concept. This gives customers fine-grained control over the compute-vs-cost tradeoff, and pushes the problem of isolating clusters down to the cloud on which the cluster runs. If Terrascale were instead a single multi-tenant cluster, we would be responsible for isolating node performance and ensuring data security boundaries between tenants; with this architecture, the cloud provider provides both guarantees to the extent applicable.
+Terrascale clusters are small (<100 node) groups of virtual machines running in a third-party cloud such as AWS, Azure or GCP. Terrascale clusters are similar in spirit to Snowflake's virtual warehouses: each cluster runs in the cloud, belongs to a single user, and stores and analyzes data for that user (and only that user). Users choose a cloud and a region; Terrascale provisions compute, storage and network resources in that region, and then stands up a Terrascale cluster running on those resources. Users interact with the Terrascale service for data plane queries, control plane operations and billing.
+
+This setup takes advantage of cloud multi-tenancy. Inside a Terrascale cluster, authorized users have full access to all stored data and can schedule any queries they wish. Outside the cluster, the hosting cloud provider sets and implements isolation guarantees, both from a security perspective (nobody else should be able to access the cluster's data) and from a performance perspective (compute- or I/O-intensive neighbors should not starve the cluster for compute time and I/O bandwidth). Because a Terrascale cluster is implemented as a network of IaaS virtual machines running in a public cloud, the cluster simply inherits whatever of these isolation guarantees are laid out in the hosting cloud's SLA.
 
 ### Orchestration
 
@@ -154,7 +157,7 @@ This scheme provides privacy by encrypting all file data. Because each block has
 
 ### Sealing and Publishing
 
-TerrascaleFS automatically tiers files by storing active files in node-local, high-cost, low-latency block storage, and offloading sealed files to cluster-wide low-cost, high-latency object storage. This provides a single-writer mutable model for the small amount of data a cluster is currently working on, anda multi-writer immutable model for most data the cluster needs. Storing data immutably in object storage reduces cost and makes it simple for many nodes to cache their own instances of input and intermediate data during cluster-wide parallel processing.
+TerrascaleFS automatically tiers files by storing active files in node-local, high-cost, low-latency block storage, and offloading sealed files to cluster-wide low-cost, high-latency object storage. This provides a single-writer mutable model for the small amount of data a cluster is currently working on, anda multi-writer immutable model for most data the cluster needs. Storing data immutably in object storage reduces cost and makes it simple for many nodes to cache their own instances of input and intermediate data during cluster-wide parallel processing. The idea of offloading 'finished' data to an external object store for cluster-wide sharing is inspired by Apache Druid's "deep storage" concept.
 
 To seal a file, the system first updates the inode table row for the file, marking it as sealed, but still private to the owning node. A unique object store name is generated for the file, and is also inserted into the inode table row during the same update operation. The system then creates said file in object store, and uploads the contents of the sealed file by streaming different portions of the original file in the node's local block storage:
 
@@ -214,16 +217,28 @@ Data types include scalar values, one-dimensional ranges, n-dimensional spaces a
 
 ### Architecture
 
+TerrascaleDB uses a two-tier model arranged around a log-structured merge engine:
+
+Incoming writes are first stored in a **realtime** database layer, which serves $L_0$ of the log-structured merge index. The realtime layer is designed to handle high read/write concurrency over a relatively small dataset. Tables are partitioned across the cluster's realtime nodes using a hash partitioning model, where the decision of which node to store a given row is determined via a consistent hash over the row's primary key; compared to range-based partitioning, this model is easier to scale elastically and does a better job of eliminating hotspots due to hot key ranges. Within a single hash partition, each realtime node stores data in an ordered index to facilitate efficient range queries. A multiversioning and distributed transaction model is used to implement range-based queries which cross partitions.
+
+Over time, writes are moved to a **historical** database layer, which serves the $L_2$ log-structured merge index. The historical layer is designed to handle a wide variety of potentially long, complex queries over very large datasets. The historical layer maintains a dual-index of its data: a row-oriented B+ tree indexed by primary key, and an inverted columnar B+ tree, each of which maps a value which appear in some column to a bitset of rows which match that column. The historical layer is partitioned independently of the realtime layer: the row index and each column index are each stored independently across historical nodes, and each is range-partitioned by splitting and merging neighboring ranges of the index into separate tree partitions based on size heuristics. All data stored in the historical layer is immutable. 
+
+Incoming writes are first stored in a realtime node's hash partition (which is a partition of the overall $L_0$ of the LSM Tree). When a hash partition reaches a certain size limit, it is checkpointed to a new $L_1$ tree. At this point, the partition no longer needs to be resident in the realtime node's memory and is offloaded; however, the realtime node continues to serve the $L_1$ tree along with new writes that are being buffered in the new $L_0$ tree. Pages of the $L_1$ B+ tree are paged in selectively in the realtime node's cache. Asynchronously, historical nodes detect new $L_1$ trees involving their key ranges are available. Once enough $L_1$ trees have been buffered, each historical node rebuilds its $L_2$ row-oriented or columnar partition, incorporating changes from all relevant $L_1$ trees. Once an $L_1$ has been merged into all relevant $L_2$ trees, the realtime node serving the $L_1$ tree deletes it. In this manner, data passes from the realtime layer to the historical layer asynchronously, passing through TerrascaleFS files backed by cloud object stores.
+
+A load balancer distributes SQL queries acrosss the realtime nodes. Point inserts are forwarded to the hash partition that owns the new row's primary key. Bulk inserts are distributed across all hash partitions using a distributed transaction model. TODO finish the zoo of query types
+
+
+
+
+
+
+
+
+
+
+
 TODO a draft scheme from yesterday: hash-partitioned range trees
 
-- L0 is a hash-partitioned range index
-- The database space is partitioned at L0 by hash on the primary key
-- The L0 node set can scale elastically using consistent hashing
-- At L0 the trees themselves are still sorted and support range queries
-- A distributed versioning system for cross-partition snapshot isolated reads
-- Individual L0 trees are multiversioned according to distribution
-- A Paxos atomic commit scheme for cross-partition updates
-- L1 trees are served by the L0 nodes using the same partition scheme
 - L0 nodes transparently share or combine L1s after repartitioning
 - L2 trees are served by the analysis nodes with size-based range partitioning
 - L2 trees include row indexed and inverted column indexed representations
@@ -231,6 +246,7 @@ TODO a draft scheme from yesterday: hash-partitioned range trees
 - Transaction coordinators contact L0-1-2 partitions as needed
 - Realtime routing system integrated at the L0 layer
 - Distributed transaction to replicate routes across all hash partitions
+- Distributed joins are partitioned at L2 with L0-1 broadcasts
 - Like druid, our node role names are realtime (L0-1) and historical (L2)
 - Point read by primary key contacts realtime by hash, historical by partition map
 - Other reads go to all realtimes, associated historicals, snapshot isolated
