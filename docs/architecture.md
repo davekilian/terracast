@@ -248,6 +248,8 @@ Spatial joins and other queries involving collision detection on vector data are
 
 We do not plan to maintain spatial subdivision structures on disk. However, should the need to do so arise, this should be possible in principle by adding a third, spatial indexing strategy to the historical layer, in addition to the row-oriented and inverted-columnar indexes.
 
+In general, the coordinator for a query exchanges data with the realtime and historical partition nodes by passing roaring bitmaps on the wire. At the end of a query, if a result set was requested (rather than aggregates), the query coordinator pages in the matching rows from the row store and computes the projection, which is then returned to the client. However, in some cases a query may return very recent rows which are still local to a realtime node and are not yet published in TerrascaleFS; for these, nodes send full rows to the query coordinator instead of bitmaps.
+
 ## Row Stores
 
 
